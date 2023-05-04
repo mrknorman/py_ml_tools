@@ -5,7 +5,10 @@ from tqdm import tqdm
 import tensorflow as tf
 
 from dataclasses import dataclass
-from noise import get_noise
+from noise import get_ifo_data, pad_gps_times_with_veto_window
+from gwpy.table import EventTable
+
+import numpy as np
 
 import os
 
@@ -85,9 +88,10 @@ def test_noise():
     frame_type = "HOFT_C01"
     state_flag = "DCS-ANALYSIS_READY_C01:1"
         
-    background_noise_iterator = get_noise(
+    background_noise_iterator = get_ifo_data(
         start = start,
         stop = stop,
+        data_labels = ["noise", "glitches"],
         ifo = "L1",
         sample_rate_hertz = 1024.0,
         channel = channel,
@@ -95,7 +99,8 @@ def test_noise():
         state_flag = state_flag,
         example_duration_seconds = 1.0,
         max_num_examples = 32,
-        num_examples_per_batch = 32
+        num_examples_per_batch = 32,
+        order = "shortest_first"
     )
     
     for i, noise_chunk in enumerate(background_noise_iterator):
@@ -106,6 +111,9 @@ def test_noise():
 if __name__ == "__main__":
     
     setup_CUDA(True, "5")
+    
+
+
     test_noise()
 
     
