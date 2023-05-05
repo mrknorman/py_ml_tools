@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 from pathlib import Path
 from random import shuffle
-from typing import List, Tuple
+from typing import List, Tuple, Union
+from datetime import datetime
 
 import numpy as np
 import tensorflow as tf
@@ -9,6 +10,55 @@ from gwdatafind import find_urls
 from gwpy.segments import DataQualityDict
 from gwpy.timeseries import TimeSeries
 from gwpy.table import EventTable
+
+from dataclasses import dataclass
+from datetime import datetime
+
+@dataclass
+class ObservingRun:
+    name: str
+    start_date_time: datetime
+    end_date_time: datetime
+    channels: dict
+    frame_types: dict
+    state_flags: dict
+
+    def __post_init__(self):
+        self.start_gps_time = self._to_gps_time(self.start_date_time)
+        self.end_gps_time = self._to_gps_time(self.end_date_time)
+
+    @staticmethod
+    def _to_gps_time(date_time: datetime) -> float:
+        gps_epoch = datetime(1980, 1, 6, 0, 0, 0)
+        time_diff = date_time - gps_epoch
+        leap_seconds = 18  # current number of leap seconds as of 2021 (change if needed)
+        total_seconds = time_diff.total_seconds() - leap_seconds
+        return total_seconds
+
+
+IFOS = ("H1", "L1", "V1")
+
+observing_run_data = (
+    ("O1", datetime(2015, 9, 12, 0, 0, 0), datetime(2016, 1, 19, 0, 0, 0),
+     {"best": "DCS-CALIB_STRAIN_CLEAN_C01"},
+     {"best": "HOFT_C01"},
+     {"best": "DCS-ANALYSIS_READY_C01:1"}),
+    ("O2", datetime(2016, 11, 30, 0, 0, 0), datetime(2017, 8, 25, 0, 0, 0),
+     {"best": "DCS-CALIB_STRAIN_CLEAN_C01"},
+     {"best": "HOFT_C01"},
+     {"best": "DCS-ANALYSIS_READY_C01:1"}),
+    ("O3", datetime(2019, 4, 1, 0, 0, 0), datetime(2020, 3, 27, 0, 0, 0),
+     {"best": "DCS-CALIB_STRAIN_CLEAN_C01"},
+     {"best": "HOFT_C01"},
+     {"best": "DCS-ANALYSIS_READY_C01:1"})
+)
+
+OBSERVING_RUNS = {name: ObservingRun(name, start_date_time, end_date_time, channels, frame_types, state_flags)
+                  for name, start_date_time, end_date_time, channels, frame_types, state_flags in observing_run_data}
+
+O1 = OBSERVING_RUNS["O1"]
+O2 = OBSERVING_RUNS["O2"]
+O3 = OBSERVING_RUNS["O3"]  
 
 @dataclass
 class NoiseChunk:
@@ -139,16 +189,17 @@ def veto_time_periods(valid_periods: List[Tuple[int, int]], veto_periods: List[T
     
     result = [time_period for valid_start, valid_end in valid_periods for time_period in remove_overlap(valid_start, valid_end, veto_periods) if time_period]
     return result
+
     
 def get_ifo_data(
-    start: float,
-    stop: float,
+    time_interval: Union[tuple, ObservingRun], 
     data_labels: List[str], 
     ifo: str,
-    sample_rate_hertz: float,
-    channel: str,
-    frame_type: str,
-    state_flag: str,
+    sample_rate_hertz: float,    
+    data_quality: str = "best",
+    channel: str = None,
+    frame_type: str = None,
+    state_flag: str = None,
     saturation: float = 1.0,
     example_duration_seconds: float = 1.0,
     max_num_examples: float = 0.0,
@@ -156,6 +207,23 @@ def get_ifo_data(
     scale_factor: float = 1.0,
     order: str = "random",
 ):
+    
+    if isinstance(time_interval, tuple):
+        start, stop = time_interval
+    elif isinstance(time_interval, ObservingRun):
+        start, stop = time_interval.start_gps_time, time_interval.end_gps_time    
+    
+        if (frame_type == None):
+            frame_type = time_interval.frame_types[data_quality]
+        if (channel == None):
+            channel = time_interval.channels[data_quality]
+        if (state_flag == None):
+            state_flag = time_interval.state_flags[data_quality]
+                    
+        print(frame_type, channel, state_flag)
+    else:
+        raise TypeError("time_interval must be either a tuple or a ObservingRun object")
+        
     valid_segments = get_segment_times(
         start,
         stop,
