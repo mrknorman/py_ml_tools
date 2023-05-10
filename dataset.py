@@ -12,6 +12,7 @@ from gwpy.segments import DataQualityDict
 from gwpy.timeseries import TimeSeries
 from gwpy.table import EventTable
 
+from pathlib import Path
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -92,8 +93,12 @@ class NoiseChunk:
 
         return tf.expand_dims(batch_subtensors, axis=-1), t0_subsections
     
-def timeseries_to_noise_chunk(timeseries : TimeSeries, scale_factor : float):
-    data = tf.convert_to_tensor(timeseries.value * scale_factor, dtype = tf.float32)
+def timeseries_to_noise_chunk(
+    timeseries : TimeSeries, 
+    scale_factor : float
+    ) -> NoiseChunk:
+    
+    data = tf.convert_to_tensor(timeseries.value * scale_factor, dtype = tf.float16)
     return NoiseChunk(data, timeseries.t0.value, timeseries.dt.value)
 
 def get_segment_times(
@@ -155,7 +160,10 @@ def pad_gps_times_with_veto_window(
     tuple_result = [tuple(pair) for pair in result]
     return tuple_result
 
-def compress_periods(periods: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+def compress_periods(
+    periods: List[Tuple[float, float]]
+    ) -> List[Tuple[float, float]]:
+    
     sorted_periods = sorted(periods, key=lambda x: x[0])
     compressed = []
 
@@ -167,7 +175,12 @@ def compress_periods(periods: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
 
     return compressed
 
-def remove_overlap(start: int, end: int, veto_periods: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+def remove_overlap(
+    start: float, 
+    end: float, 
+    veto_periods: List[Tuple[float, float]]
+    ) -> List[Tuple[float, float]]:
+    
     result = [(start, end)]
     for veto_start, veto_end in veto_periods:
         new_result = []
@@ -186,26 +199,43 @@ def remove_overlap(start: int, end: int, veto_periods: List[Tuple[int, int]]) ->
         result = new_result
     return result
 
-def veto_time_periods(valid_periods: List[Tuple[int, int]], veto_periods: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+def veto_time_periods(
+    valid_periods: List[Tuple[float, float]], 
+    veto_periods: List[Tuple[float, float]]
+    ) -> List[Tuple[float, float]]:
+    
     valid_periods = compress_periods(valid_periods)
     veto_periods = compress_periods(veto_periods)
     
     result = [time_period for valid_start, valid_end in valid_periods for time_period in remove_overlap(valid_start, valid_end, veto_periods) if time_period]
     return result
 
-def open_hdf5_file(filename, mode='r+'):
+def open_hdf5_file(
+    file_path : Union[str, Path], 
+    mode : str ='r+'
+    ) -> h5py.File:
+    
+    file_path = Path(file_path)
     try:
         # Try to open the HDF5 file in the specified mode
-        f = h5py.File(filename, mode)
+        f = h5py.File(file_path, mode)
         f.close()
     except OSError:
         # The file does not exist, so create it in write mode
-        f = h5py.File(filename, 'w')
+        f = h5py.File(file_path, 'w')
         f.close()
-        print(f'The file {filename} was created in write mode.')
+        print(f'The file {file_path} was created in write mode.')
     else:
-        print(f'The file {filename} was opened in {mode} mode.')
-    return h5py.File(filename, mode)
+        print(f'The file {file_path} was opened in {mode} mode.')
+    return h5py.File(file_path, mode)
+
+def ensure_directory_exists(
+    directory: Union[str, Path]
+    ):
+    
+    directory = Path(directory)  # Convert to Path if not already
+    if not directory.exists():
+        directory.mkdir(parents=True, exist_ok=True)
 
 def get_ifo_data(
     time_interval: Union[tuple, ObservingRun], 
@@ -223,8 +253,12 @@ def get_ifo_data(
     scale_factor: float = 1.0,
     order: str = "random",
     seed: int = 1000,
-    force_generation: bool = False,  # new argument
+    force_generation: bool = False,
+    data_directory: Union[str, Path] = "../generator_data"
 ):
+    data_directory = Path(data_directory)
+    ensure_directory_exists(data_directory)
+    
     tf.random.set_seed(seed)
     random.seed(seed)
     
@@ -261,7 +295,7 @@ def get_ifo_data(
     segment_parameters = [frame_type, channel, state_flag, str(data_labels)] # get a dictionary of all parameters
     param_string = str(segment_parameters)  # convert the dictionary to a string
     param_hash = hashlib.sha1(param_string.encode()).hexdigest()
-    segment_filename = f"segment_data_{param_hash}.hdf5"
+    segment_filename = data_directory / f"segment_data_{param_hash}.hdf5"
     
     valid_segments = get_segment_times(
         start,
