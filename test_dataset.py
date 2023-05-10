@@ -1,11 +1,7 @@
-from datetime import datetime
-from pathlib import Path
-from tqdm import tqdm
-
 import tensorflow as tf
 
 from dataclasses import dataclass
-from noise import get_ifo_data, pad_gps_times_with_veto_window, O3
+from dataset import get_ifo_data, O3
 from gwpy.table import EventTable
 
 import numpy as np

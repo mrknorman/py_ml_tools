@@ -1,10 +1,11 @@
 from dataclasses import dataclass
-from pathlib import Path
 from random import shuffle
+import random
 from typing import List, Tuple, Union
 from datetime import datetime
 
 import numpy as np
+import hashlib
 import tensorflow as tf
 from gwdatafind import find_urls
 from gwpy.segments import DataQualityDict
@@ -13,6 +14,8 @@ from gwpy.table import EventTable
 
 from dataclasses import dataclass
 from datetime import datetime
+
+import h5py
 
 @dataclass
 class ObservingRun:
@@ -190,7 +193,20 @@ def veto_time_periods(valid_periods: List[Tuple[int, int]], veto_periods: List[T
     result = [time_period for valid_start, valid_end in valid_periods for time_period in remove_overlap(valid_start, valid_end, veto_periods) if time_period]
     return result
 
-    
+def open_hdf5_file(filename, mode='r+'):
+    try:
+        # Try to open the HDF5 file in the specified mode
+        f = h5py.File(filename, mode)
+        f.close()
+    except OSError:
+        # The file does not exist, so create it in write mode
+        f = h5py.File(filename, 'w')
+        f.close()
+        print(f'The file {filename} was created in write mode.')
+    else:
+        print(f'The file {filename} was opened in {mode} mode.')
+    return h5py.File(filename, mode)
+
 def get_ifo_data(
     time_interval: Union[tuple, ObservingRun], 
     data_labels: List[str], 
@@ -206,24 +222,47 @@ def get_ifo_data(
     num_examples_per_batch: int = 1,
     scale_factor: float = 1.0,
     order: str = "random",
+    seed: int = 1000,
+    force_generation: bool = False,  # new argument
 ):
+    tf.random.set_seed(seed)
+    random.seed(seed)
     
+    def get_new_segment_data(segment_start, segment_end):
+        files = find_urls(
+            site=ifo.strip("1"),
+            frametype=f"{ifo}_{frame_type}",
+            gpsstart=segment_start,
+            gpsend=segment_end,
+            urltype="file",
+        )
+
+        data = TimeSeries.read(
+            files, channel=f"{ifo}:{channel}", start=segment_start, end=segment_end, nproc=4
+        )
+
+        return data
+
     if isinstance(time_interval, tuple):
         start, stop = time_interval
     elif isinstance(time_interval, ObservingRun):
         start, stop = time_interval.start_gps_time, time_interval.end_gps_time    
-    
+
         if (frame_type == None):
             frame_type = time_interval.frame_types[data_quality]
         if (channel == None):
             channel = time_interval.channels[data_quality]
         if (state_flag == None):
             state_flag = time_interval.state_flags[data_quality]
-                    
-        print(frame_type, channel, state_flag)
     else:
         raise TypeError("time_interval must be either a tuple or a ObservingRun object")
-        
+    
+    # Generate a hash from the input parameters to use as a unique identifier
+    segment_parameters = [frame_type, channel, state_flag, str(data_labels)] # get a dictionary of all parameters
+    param_string = str(segment_parameters)  # convert the dictionary to a string
+    param_hash = hashlib.sha1(param_string.encode()).hexdigest()
+    segment_filename = f"segment_data_{param_hash}.hdf5"
+    
     valid_segments = get_segment_times(
         start,
         stop,
@@ -242,59 +281,50 @@ def get_ifo_data(
         #print(glitches)
         print("Glitch vetos not implemented!")
         pass
-    
+
     valid_segments = veto_time_periods(valid_segments, veto_segments)
-    
+
     if order == "random":
         shuffle(valid_segments)
     elif order == "shortest_first":
         valid_segments = sorted(valid_segments, key=lambda duration: duration[1] - duration[0])
+    elif order == "chronological":
+        pass
 
-    def get_new_segment_data(segment_start, segment_end):
-        files = find_urls(
-            site=ifo.strip("1"),
-            frametype=f"{ifo}_{frame_type}",
-            gpsstart=segment_start,
-            gpsend=segment_end,
-            urltype="file",
-        )
-
-        data = TimeSeries.read(
-            files, channel=f"{ifo}:{channel}", start=segment_start, end=segment_end, nproc=4
-        )
-        data = data.resample(sample_rate_hertz)
-        data = data.whiten(4, 2)
-
-        if np.isnan(data).any():
-            raise ValueError(f"The noise for ifo {ifo} contains NaN values")
-
-        return timeseries_to_noise_chunk(data, scale_factor)
-
-    current_segment_index = 0
     current_example_index = 0
+    
+    with open_hdf5_file(segment_filename) as f:
+        
+        for current_segment_start, current_segment_end in valid_segments:
+            
+            current_max_batch_count = int((current_segment_end - current_segment_start) / saturation * num_examples_per_batch)
+            segment_key = f"segments/segment_{current_segment_start}_{current_segment_end}"
+            
+            try:
+                if segment_key in f:
+                    timeseries_data = f[segments/segment_key][()]
+                else: 
+                    print(f"Loading segments of duration {current_segment_end - current_segment_start}...")
+                    timeseries_data = get_new_segment_data(current_segment_start, current_segment_end)
+                    print("Complete!")
+                    
+                    f.create_dataset(segment_key, data=timeseries_data)
+                    
+                timeseries_data = timeseries_data.resample(sample_rate_hertz)
+                timeseries_data = timeseries_data.whiten(4, 2)
+                    
+                current_segment_data = timeseries_to_noise_chunk(timeseries_data, scale_factor)
 
-    while current_segment_index < len(valid_segments):
-        current_segment_start, current_segment_end = valid_segments[current_segment_index]
-        current_max_sample_count = int((current_segment_end - current_segment_start) / saturation)
+                for _ in range(current_max_batch_count):
+                    num_subsection_elements = int(example_duration_seconds * sample_rate_hertz)
+                    batch_noise_data = current_segment_data.random_subsection(num_subsection_elements, num_examples_per_batch)
 
-        try:
-            print(f"Loading segments of duration {current_segment_end - current_segment_start}")
-            current_segment_data = get_new_segment_data(current_segment_start, current_segment_end)
-            print("Complete!")
+                    current_example_index += num_examples_per_batch;
 
-            for _ in range(current_max_sample_count):
-                num_subsection_elements = int(example_duration_seconds * sample_rate_hertz)
-                batch_noise_data = current_segment_data.random_subsection(num_subsection_elements, num_examples_per_batch)
-                
-                current_example_index += num_examples_per_batch;
-                
-                if (max_num_examples > 0) and (current_example_index > max_num_examples):
-                    print("Exausted Examples! Exiting!")
-                    return
-                                    
-                yield batch_noise_data
+                    if (max_num_examples > 0) and (current_example_index > max_num_examples):
+                        return
 
-        except Exception as e:
-            print(f"Unexpected error: {type(e).__name__}, {str(e)}")
+                    yield batch_noise_data
 
-        current_segment_index += 1
+            except Exception as e:
+                print(f"Unexpected error: {type(e).__name__}, {str(e)}")
