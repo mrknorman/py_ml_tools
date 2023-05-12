@@ -1,36 +1,5 @@
-import tensorflow as tf
-
-from dataclasses import dataclass
 from dataset import get_ifo_data, O3
-from gwpy.table import EventTable
-
-import numpy as np
-
-import os
-
-def setup_CUDA(verbose, device_num):
-		
-	os.environ["CUDA_VISIBLE_DEVICES"] = str(device_num)
-		
-	gpus =  tf.config.list_logical_devices('GPU')
-	strategy = tf.distribute.MirroredStrategy(gpus)
-
-	physical_devices = tf.config.list_physical_devices('GPU')
-	
-	for device in physical_devices:	
-
-		try:
-			tf.config.experimental.set_memory_growth(device, True)
-		except:
-			# Invalid device or cannot modify virtual devices once initialized.
-			pass
-	
-	tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-
-	if verbose:
-		tf.config.list_physical_devices("GPU")
-		
-	return strategy
+from setup import setup_cuda
 
 def test_noise():
             
@@ -51,8 +20,7 @@ def test_noise():
         print(i*32)
         
 if __name__ == "__main__":
-    
-    setup_CUDA(True, "5")
+    setup_cuda("5")
     test_noise()
 
     

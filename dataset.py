@@ -331,7 +331,7 @@ def get_ifo_data(
         
         for current_segment_start, current_segment_end in valid_segments:
             
-            current_max_batch_count = int((current_segment_end - current_segment_start) / saturation * num_examples_per_batch)
+            current_max_batch_count = int((current_segment_end - current_segment_start) / (saturation * num_examples_per_batch))
             segment_key = f"segments/segment_{current_segment_start}_{current_segment_end}"
             
             try:
