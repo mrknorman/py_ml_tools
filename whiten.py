@@ -80,8 +80,13 @@ def truncate_impulse(impulse: cupy.ndarray, ntaps: int, window: str = 'hann') ->
         The truncated impulse response.
     """
     
+    # Ensure ntaps does not exceed the size of the impulse response
+    if ntaps % 2 != 0:
+        raise ValueError("ntaps must be an even number")
+    
     trunc_start = int(ntaps / 2)
     trunc_stop = impulse.size - trunc_start
+    
     window = cusignal.windows.windows.get_window(window, ntaps)
     impulse[:trunc_start] *= window[trunc_start:ntaps]
     impulse[trunc_stop:] *= window[:trunc_start]
@@ -195,24 +200,30 @@ def whiten(
         The whitened time series.
     """
     dt = 1 / sample_rate
-        
-    freqs, psd = cusignal.welch(
-        timeseries, 
-        fs=sample_rate, 
-        nperseg=int(sample_rate*fftlength), 
-        noverlap=int(sample_rate*overlap)
-    )
+
+    freqs, psd = \
+        cusignal.spectral_analysis.spectral.csd(
+            timeseries, 
+            timeseries, 
+            fs=sample_rate, 
+            window=window, 
+            nperseg=int(sample_rate*fftlength), 
+            noverlap=int(sample_rate*overlap), 
+            average='median')
+    
     asd = cupy.sqrt(psd)
     
     df = 1.0 / (len(timeseries) / sample_rate)
     fsamples = cupy.arange(0, len(timeseries)//2+1) * df
-    asd_interpolated = cupy.interp(fsamples, cupy.asarray(freqs), cupy.asarray(asd))
+    asd_interpolated = cupy.interp(fsamples, cupy.asarray(freqs), asd)
     
     ncorner = int(highpass / df) if highpass else 0
     ntaps = int(fduration * sample_rate)
-    transfer = 1.0 / asd
+    transfer = 1.0 / asd_interpolated
     
     tdw = fir_from_transfer(transfer, ntaps, window=window, ncorner=ncorner)
+    
+    timeseries = cusignal.filtering.detrend(timeseries)
     out = convolve(timeseries, tdw, window=window)
     
     return out * cupy.sqrt(2 * dt)
