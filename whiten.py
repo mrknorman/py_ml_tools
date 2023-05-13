@@ -166,10 +166,12 @@ def convolve(timeseries: cupy.ndarray, fir: cupy.ndarray, window: str = 'hann') 
 
 def whiten(
     timeseries: cupy.ndarray, 
+    background: cupy.ndarray,
     sample_rate: float, 
     fftlength: int = 4, 
     overlap: int = 2,
     highpass: float = None,
+    detrend ='constant',
     fduration: int = 2,
     window: str = "hann"
     ) -> cupy.ndarray:
@@ -181,6 +183,8 @@ def whiten(
     ----------
     timeseries : cupy.ndarray
         The time series data to whiten.
+    background : cupy.ndarray
+        The time series to use to calculate the asd.
     sample_rate : float
         The sample rate of the time series data.
     fftlength : int, optional
@@ -203,8 +207,8 @@ def whiten(
 
     freqs, psd = \
         cusignal.spectral_analysis.spectral.csd(
-            timeseries, 
-            timeseries, 
+            background, 
+            background, 
             fs=sample_rate, 
             window=window, 
             nperseg=int(sample_rate*fftlength), 
@@ -215,15 +219,16 @@ def whiten(
     
     df = 1.0 / (len(timeseries) / sample_rate)
     fsamples = cupy.arange(0, len(timeseries)//2+1) * df
-    asd_interpolated = cupy.interp(fsamples, cupy.asarray(freqs), asd)
+    
+    if (len(asd) != len(timeseries)):
+        asd = cupy.interp(fsamples, cupy.asarray(freqs), asd)
     
     ncorner = int(highpass / df) if highpass else 0
     ntaps = int(fduration * sample_rate)
-    transfer = 1.0 / asd_interpolated
+    transfer = 1.0 / asd
     
     tdw = fir_from_transfer(transfer, ntaps, window=window, ncorner=ncorner)
-    
-    timeseries = cusignal.filtering.detrend(timeseries)
+    timeseries = cusignal.filtering.detrend(timeseries, type=detrend, overwrite_data=True)
     out = convolve(timeseries, tdw, window=window)
-    
-    return out * cupy.sqrt(2 * dt)
+
+    return out * cupy.sqrt(dt)

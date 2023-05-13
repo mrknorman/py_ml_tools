@@ -59,7 +59,7 @@ def compare_perf_cases(cases_dict):
     p.legend.label_text_font_size = "10pt"
 
     # Save to HTML file
-    output_file("performance_comparison.html")
+    output_file("../performance_comparison.html")
     save(p)
 
 def plot_whitening_outputs(
@@ -129,6 +129,7 @@ def test_whiten_functions(
     
     # Create a GWpy TimeSeries object
     ts = TimeSeries(data, sample_rate=sample_rate)
+    
     whitened_ts = ts.whiten(fftlength=fftlength, overlap=overlap).value
     
     f, ts_psd = \
@@ -150,7 +151,7 @@ def test_whiten_functions(
 
     # Time and run cupy-based function
     timeseries = cupy.asarray(data)
-    whitened_cp = whiten(timeseries, sample_rate, fftlength=fftlength, overlap=overlap)
+    whitened_cp = whiten(timeseries, timeseries, sample_rate, fftlength=fftlength, overlap=overlap)
     whitened_cp = cupy.asnumpy(whitened_cp)
     
     f, cp_psd = \
@@ -165,11 +166,9 @@ def test_whiten_functions(
     
     residuals = np.abs(whitened_cp - whitened_ts)
     
-    print("diff:", np.mean(whitened_cp/whitened_ts))
-
     performance_results["CuPy"] = benchmark( \
             whiten, 
-            (timeseries, sample_rate, fftlength, overlap), 
+            (timeseries, timeseries, sample_rate, fftlength, overlap), 
             n_repeat=num_trials)
     
     results = {"Original": data, "CuPy": whitened_cp, "GWPY": whitened_ts, "Residuals": residuals}
