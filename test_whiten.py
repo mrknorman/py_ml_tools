@@ -179,6 +179,4 @@ def test_whiten_functions(
     psd_results = {"Original": data_psd, "CuPy": cp_psd, "GWPY": ts_psd}
     plot_whitening_outputs(f, psd_results, "../psd_outputs.html")  
 
-
-
 test_whiten_functions()

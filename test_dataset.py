@@ -11,7 +11,8 @@ def test_noise():
         example_duration_seconds = 1.0,
         max_num_examples = 32,
         num_examples_per_batch = 32,
-        order = "shortest_first"
+        order = "shortest_first",
+        apply_whitening = True
     )
     
     for i, noise_chunk in enumerate(background_noise_iterator):

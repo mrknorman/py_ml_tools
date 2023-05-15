@@ -16,6 +16,12 @@ from pathlib import Path
 from dataclasses import dataclass
 from datetime import datetime
 
+import cupy
+from whiten import whiten
+import cusignal
+from cusignal.filtering.resample import decimate
+from cupyx.profiler import benchmark
+
 import h5py
 
 @dataclass
@@ -65,42 +71,63 @@ O2 = OBSERVING_RUNS["O2"]
 O3 = OBSERVING_RUNS["O3"]  
 
 @dataclass
-class NoiseChunk:
-    noise : tf.Tensor
-    t0    : float
-    dt    : float
+class IFOData:
+    data        : Union[TimeSeries, cupy.ndarray, np.ndarray]
+    t0          : float
+    sample_rate : float
     
-    def random_subsection(self, num_subsection_elements: int, num_examples_per_batch: int):      
-        # Check if the input tensor is 1D
-        assert len(self.noise.shape) == 1, "Input tensor must be 1D"
+    def __post_init__(self):
+        if (type(self.data) == TimeSeries):
+            self.data = cupy.asarray(self.data.value, dtype=cupy.float32)
+        elif (type(self.data) == np.ndarray):
+            self.data = cupy.asarray(self.data, dtype=cupy.float32)
+        
+        self.duration = len(self.data)/self.sample_rate
+        self.dt = 1.0/self.sample_rate
+            
+    def downsample(self, new_sample_rate: Union[int, float]):        
+        factor = int(self.sample_rate / new_sample_rate)
 
-        # Get the length of the input tensor
-        N = self.noise.shape[0]
+        self.data = decimate(self.data, factor)
+        self.sample_rate = new_sample_rate
+        
+        return self
+    
+    def scale(self, scale_factor:  Union[int, float]):
+        self.data *= scale_factor
+        return self
+    
+    def numpy(self):
+        """Converts the data to a numpy array."""
+        return cupy.asnumpy(self.data)
+    
+    def random_subsection(self, num_subsection_elements: int, num_background_elements: int, num_examples_per_batch: int):      
+        # Check if the input array is 1D
+        assert len(self.data.shape) == 1, "Input array must be 1D"
 
-        # Ensure X is smaller or equal to N
-        assert num_subsection_elements <= N, "X must be smaller or equal to the length of the tensor"
+        # Get the length of the input array
+        N = self.data.shape[0]
+
+        # Ensure num_subsection_elements + num_background_elements is smaller or equal to N
+        assert num_subsection_elements + num_background_elements <= N, "num_subsection_elements + num_background_elements must be smaller or equal to the length of the array"
 
         # Generate a random starting index for each element in the batch
-        maxval = tf.cast(N - num_subsection_elements + 1, dtype=tf.int32)
-        random_starts = tf.random.uniform((num_examples_per_batch,), minval=0, maxval=maxval, dtype=tf.int32)
+        maxval = N - num_subsection_elements - num_background_elements + 1
+        random_starts = cupy.random.randint(num_background_elements, maxval, size=(num_examples_per_batch,))
 
-        # Extract the subsections of the tensor for the entire batch
-        indices = tf.expand_dims(tf.range(num_subsection_elements, dtype=tf.int32), 0) + random_starts[:, tf.newaxis]
-        batch_subtensors = tf.gather(self.noise, indices)
+        # Extract the subsections of the array for the entire batch
+        indices = cupy.expand_dims(cupy.arange(num_subsection_elements), 0) + random_starts[:, cupy.newaxis]
+        batch_subarrays = self.data[indices]
+
+        # Extract the background chunks of the array for the entire batch
+        bg_indices = cupy.expand_dims(cupy.arange(num_background_elements), 0) + (random_starts - num_background_elements)[:, cupy.newaxis]
+        batch_background_chunks = self.data[bg_indices]
 
         # Calculate the t0 for each captured subsection
-        t0_subsections = self.t0 + tf.cast(random_starts, dtype=tf.float32) * self.dt
+        t0_subsections = self.t0 + cupy.asnumpy(random_starts).astype(cupy.float32) * self.dt
 
-        return tf.expand_dims(batch_subtensors, axis=-1), t0_subsections
+        return batch_subarrays, batch_background_chunks, t0_subsections
     
-def timeseries_to_noise_chunk(
-    timeseries : TimeSeries, 
-    scale_factor : float
-    ) -> NoiseChunk:
-    
-    data = tf.convert_to_tensor(timeseries.value * scale_factor, dtype = tf.float16)
-    return NoiseChunk(data, timeseries.t0.value, timeseries.dt.value)
-
 def get_segment_times(
     start: float,
     stop: float,
@@ -248,7 +275,9 @@ def get_ifo_data(
     state_flag: str = None,
     saturation: float = 1.0,
     example_duration_seconds: float = 1.0,
+    background_duration_seconds: float = 16.0,
     max_num_examples: float = 0.0,
+    apply_whitening: bool = False,
     num_examples_per_batch: int = 1,
     scale_factor: float = 1.0,
     order: str = "random",
@@ -292,7 +321,7 @@ def get_ifo_data(
         raise TypeError("time_interval must be either a tuple or a ObservingRun object")
     
     # Generate a hash from the input parameters to use as a unique identifier
-    segment_parameters = [frame_type, channel, state_flag, str(data_labels)] # get a dictionary of all parameters
+    segment_parameters = [frame_type, channel, state_flag, str(data_labels), sample_rate_hertz] # get a dictionary of all parameters
     param_string = str(segment_parameters)  # convert the dictionary to a string
     param_hash = hashlib.sha1(param_string.encode()).hexdigest()
     segment_filename = data_directory / f"segment_data_{param_hash}.hdf5"
@@ -302,7 +331,7 @@ def get_ifo_data(
         stop,
         ifo,
         state_flag,
-        example_duration_seconds*num_examples_per_batch,
+        example_duration_seconds*num_examples_per_batch + background_duration_seconds,
         0
     )
     
@@ -329,36 +358,55 @@ def get_ifo_data(
     
     with open_hdf5_file(segment_filename) as f:
         
+        f.require_group("segments")
         for current_segment_start, current_segment_end in valid_segments:
             
             current_max_batch_count = int((current_segment_end - current_segment_start) / (saturation * num_examples_per_batch))
             segment_key = f"segments/segment_{current_segment_start}_{current_segment_end}"
-            
-            try:
-                if segment_key in f:
-                    timeseries_data = f[segments/segment_key][()]
-                else: 
-                    print(f"Loading segments of duration {current_segment_end - current_segment_start}...")
+                            
+            current_segment_data = None
+
+            if segment_key in f:
+                timeseries_data = f[segment_key][()] 
+                current_segment_data = IFOData(timeseries_data, current_segment_start, sample_rate_hertz)
+            else: 
+
+                print(f"Loading segments of duration {current_segment_end - current_segment_start}...")
+
+                try:
                     timeseries_data = get_new_segment_data(current_segment_start, current_segment_end)
-                    print("Complete!")
-                    
-                    f.create_dataset(segment_key, data=timeseries_data)
-                    
-                timeseries_data = timeseries_data.resample(sample_rate_hertz)
-                timeseries_data = timeseries_data.whiten(4, 2)
-                    
-                current_segment_data = timeseries_to_noise_chunk(timeseries_data, scale_factor)
+                except Exception as e:
+                    print(f"Unexpected error: {type(e).__name__}, {str(e)}")
+                    continue
 
-                for _ in range(current_max_batch_count):
-                    num_subsection_elements = int(example_duration_seconds * sample_rate_hertz)
-                    batch_noise_data = current_segment_data.random_subsection(num_subsection_elements, num_examples_per_batch)
+                print("Complete!")
 
-                    current_example_index += num_examples_per_batch;
+                current_segment_data = IFOData(timeseries_data, timeseries_data.t0.value, timeseries_data.sample_rate.value)
+                current_segment_data = current_segment_data.downsample(sample_rate_hertz)            
+                f.create_dataset(segment_key, data = current_segment_data.numpy())
 
-                    if (max_num_examples > 0) and (current_example_index > max_num_examples):
-                        return
+            current_segment_data = current_segment_data.scale(scale_factor)                
 
-                    yield batch_noise_data
+            for _ in range(current_max_batch_count):
+                num_subsection_elements = int(example_duration_seconds * sample_rate_hertz)
+                num_background_elements = int(background_duration_seconds * sample_rate_hertz)
+                batched_examples = current_segment_data.random_subsection(num_subsection_elements, num_background_elements, num_examples_per_batch)
+                
+                # Injection, projection
+                
+                
+                print(batched_examples[0].shape)
+                if apply_whitening:
+                    #cusignal.spectral_analysis.spectral.csd(batched_examples[1], batched_examples[1])
+                    batched_examples = whiten(batched_examples[0], batched_examples[1], sample_rate_hertz, fftlength = 1.0, overlap = 0.5, fduration = 1.0)                        
+                print(batched_examples.shape)
 
-            except Exception as e:
-                print(f"Unexpected error: {type(e).__name__}, {str(e)}")
+                quit()
+
+                current_example_index += num_examples_per_batch;
+
+                if (max_num_examples > 0) and (current_example_index > max_num_examples):
+                    return
+
+                yield batched_examples
+
