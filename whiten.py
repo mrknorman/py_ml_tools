@@ -30,11 +30,18 @@ def planck(N: int, nleft: int, nright: int) -> cupy.ndarray:
     taper_right = 1 / (cupy.exp(-right/(nright-1)) + 1)
     
     # Combine the left taper, a flat middle segment, and the right taper
-    window = cupy.concatenate((taper_left, cupy.ones(N-nleft-nright), taper_right[::-1]))
+    window = cupy.concatenate((
+        taper_left, 
+        cupy.ones(N-nleft-nright), 
+        taper_right[::-1])
+    )
     
     return window
 
-def truncate_transfer(transfer: cupy.ndarray, ncorner: int = None) -> cupy.ndarray:
+def truncate_transfer(
+    transfer: cupy.ndarray,
+    ncorner: int = None
+    ) -> cupy.ndarray:
     """
     Smoothly zero the edges of a frequency domain transfer function.
     
@@ -55,16 +62,22 @@ def truncate_transfer(transfer: cupy.ndarray, ncorner: int = None) -> cupy.ndarr
     
     # Validate that ncorner is within the range of the array size
     if ncorner >= nsamp:
-        raise ValueError("ncorner must be less than the size of the transfer array")
+        raise ValueError(
+            "ncorner must be less than the size of the transfer array"
+        )
         
     plank = planck(nsamp-ncorner, nleft=5, nright=5)
         
-    transfer[:ncorner] = 0
-    transfer[ncorner:nsamp] *= planck(nsamp-ncorner, nleft=5, nright=5)
+    transfer[:,:ncorner] = 0
+    transfer[:,ncorner:nsamp] *= planck(nsamp-ncorner, nleft=5, nright=5)
     
     return transfer
 
-def truncate_impulse(impulse: cupy.ndarray, ntaps: int, window: str = 'hann') -> cupy.ndarray:
+def truncate_impulse(
+    impulse: cupy.ndarray, 
+    ntaps: int, 
+    window: str = 'hann'
+    ) -> cupy.ndarray:
     """
     Smoothly truncate a time domain impulse response.
     
@@ -92,19 +105,18 @@ def truncate_impulse(impulse: cupy.ndarray, ntaps: int, window: str = 'hann') ->
         
     window = cusignal.windows.windows.get_window(window, ntaps)
     
-    if impulse.ndim == 1:
-        impulse[:trunc_start] *= window[trunc_start:ntaps]
-        impulse[trunc_stop:] *= window[:trunc_start]
-        impulse[trunc_start:trunc_stop] = 0
-    elif impulse.ndim == 2: 
-        impulse[:,:trunc_start] *= window[trunc_start:ntaps]
-        impulse[:,trunc_stop:] *= window[:trunc_start]
-        impulse[:,trunc_start:trunc_stop] = 0
-        
+    impulse[:,:trunc_start] *= window[trunc_start:ntaps]
+    impulse[:,trunc_stop:] *= window[:trunc_start]
+    impulse[:,trunc_start:trunc_stop] = 0
 
     return impulse
 
-def fir_from_transfer(transfer: cupy.ndarray, ntaps: int, window: str = 'hann', ncorner: int = 0) -> cupy.ndarray:
+def fir_from_transfer(
+    transfer: cupy.ndarray, 
+    ntaps: int, 
+    window: str = 'hann', 
+    ncorner: int = 0
+    ) -> cupy.ndarray:
     """Design a Type II FIR filter given an arbitrary transfer function
     Parameters
     ----------
@@ -128,12 +140,17 @@ def fir_from_transfer(transfer: cupy.ndarray, ntaps: int, window: str = 'hann', 
     impulse = cupyx.scipy.fftpack.irfft(transfer)
     impulse = truncate_impulse(impulse, ntaps=ntaps, window=window)
     
-    impulse = cupy.roll(impulse, int(ntaps/2 - 1))[: ntaps]
+    impulse = cupy.roll(impulse, int(ntaps/2 - 1))[:, : ntaps]
     return impulse
 
-def convolve2d(timeseries: cupy.ndarray, fir: cupy.ndarray, window: str = 'hann') -> cupy.ndarray:
+def convolve(
+    timeseries: cupy.ndarray, 
+    fir: cupy.ndarray, 
+    window: str = 'hann'
+    ) -> cupy.ndarray:
     """
-    Perform convolution between the timeseries and the finite impulse response filter.
+    Perform convolution between the timeseries and the finite impulse response 
+    filter.
     
     Parameters
     ----------
@@ -164,73 +181,72 @@ def convolve2d(timeseries: cupy.ndarray, fir: cupy.ndarray, window: str = 'hann'
         conv = cusignal.convolve(timeseries, fir, mode='same', method = 'fft')
     else:
         nstep = nfft - 2*pad
-        conv[:, :nfft-pad] = cusignal.convolve(timeseries[:, :nfft], fir, mode='same', method = 'fft')[:, :nfft-pad]
+        conv[:, :nfft-pad] = cusignal.convolve(
+            timeseries[:, :nfft], 
+            fir, 
+            mode='same', 
+            method = 'fft'
+        )[:, :nfft-pad]
 
         k = nfft - pad
         while k < timeseries.shape[-1] - nfft + pad:
-            yk = cusignal.convolve(timeseries[:, k-pad:k+nstep+pad], fir, mode='same', method = 'fft')
+            yk = cusignal.convolve(
+                timeseries[:, k-pad:k+nstep+pad], 
+                fir,
+                mode='same', 
+                method = 'fft'
+            )
             conv[:, k:k+yk.shape[-1]-2*pad] = yk[:, pad:-pad]
             k += nstep
 
-        conv[:, -nfft+pad:] = cusignal.convolve(timeseries[:, -nfft:], fir, mode='same', method = 'fft')[:, -nfft+pad:]
+        conv[:, -nfft+pad:] = cusignal.convolve(
+            timeseries[:, -nfft:], fir, mode='same', method = 'fft'
+        )[:, -nfft+pad:]
 
     return conv
 
-def convolve(timeseries: cupy.ndarray, fir: cupy.ndarray, window: str = 'hann') -> cupy.ndarray:
+def interpolate(
+    new_x: cupy.ndarray, 
+    x: cupy.ndarray, 
+    y: cupy.ndarray
+    ) -> cupy.ndarray:
     """
-    Perform convolution between the timeseries and the finite impulse response filter.
-    
+    Interpolate a 2D array along each row.
+
+    This function uses linear interpolation to find new y-values for the given
+    `new_x` values, based on the existing (`x`, `y`) pairs. The interpolation
+    is performed independently for each sub-array of `y`.
+
     Parameters
     ----------
-    timeseries : cupy.ndarray
-        The time series data to convolve.
-    fir : cupy.ndarray
-        The finite impulse response filter.
-    window : str, optional
-        Window function to use, default is 'hann'.
-        
+    new_x : cupy.ndarray
+        The x-values at which to interpolate the y-values. This should be a
+        1D array.
+    x : cupy.ndarray
+        The existing x-values. This should be a 1D array of the same length
+        as `new_x`.
+    y : cupy.ndarray
+        The existing y-values. This should be a 2D array, where each row is
+        a separate set of y-values corresponding to the `x` values.
+
     Returns
     -------
-    conv : cupy.ndarray
-        The convolved time series.
+    result : cupy.ndarray
+        A 2D array of the same shape as `y`, containing the interpolated
+        y-values at the `new_x` positions. The interpolation is performed
+        separately for each row of `y`.
+
+    Notes
+    -----
+    This function uses `cupy.interp`, which performs linear interpolation.
     """
-    pad = int(cupy.ceil(fir.size/2))
-    
-    # Optimizing FFT size to power of 2 for efficiency
-    nfft = min(8*fir.shape[-1], timeseries.shape[-1])
 
-    window = cusignal.windows.get_window(window, fir.size)
+    # Initialize an empty array for the result
+    result = cupy.empty((y.shape[0], len(new_x)))
 
-    timeseries[:pad] *= window[:pad]
-    timeseries[-pad:] *= window[-pad:]
-
-    if nfft >= timeseries.size/2:
-        conv = cusignal.convolve(timeseries, fir, mode='same', method = 'fft')
-    else:
-        nstep = nfft - 2*pad
-        conv = cupy.zeros(timeseries.size)
-        conv[:nfft-pad] = cusignal.convolve(timeseries[:nfft], fir, mode='same', method = 'fft')[:nfft-pad]
-
-        k = nfft - pad
-        while k < timeseries.size - nfft + pad:
-            yk = cusignal.convolve(timeseries[k-pad:k+nstep+pad], fir, mode='same', method = 'fft')
-            conv[k:k+yk.size-2*pad] = yk[pad:-pad]
-            k += nstep
-
-        conv[-nfft+pad:] = cusignal.convolve(timeseries[-nfft:], fir, mode='same', method = 'fft')[-nfft+pad:]
-
-    return conv
-
-def interpolate(new_x, x, y):
-    if y.ndim == 1:
-        result = cupy.interp(new_x, x, y)
-    elif y.ndim == 2:
-        # Initialize an empty array for the result
-        result = cupy.empty((y.shape[0], len(new_x)))
-
-        # Apply cupy.interp to each sub-array
-        for i in range(y.shape[0]):
-            result[i] = cupy.interp(new_x, x, y[i])
+    # Apply cupy.interp to each sub-array
+    for i in range(y.shape[0]):
+        result[i] = cupy.interp(new_x, x, y[i])
         
     return result
 
@@ -273,6 +289,14 @@ def whiten(
     out : cupy.ndarray
         The whitened time series.
     """
+    
+    # Check if input is 1D or 2D
+    is_1d = timeseries.ndim == 1
+    if is_1d:
+        # If 1D, add an extra dimension
+        timeseries = timeseries[None, :]
+        background = background[None, :]
+    
     dt = 1 / sample_rate
             
     freqs, psd = \
@@ -300,11 +324,14 @@ def whiten(
     transfer = 1.0 / asd
             
     tdw = fir_from_transfer(transfer, ntaps, window=window, ncorner=ncorner)
-    timeseries = cusignal.filtering.detrend(timeseries, type=detrend, overwrite_data=True)
+    timeseries = cusignal.filtering.detrend(
+        timeseries, type=detrend, overwrite_data=True
+    )
     
-    if timeseries.ndim == 1:
-        out = convolve(timeseries, tdw, window=window)
-    elif timeseries.ndim == 2:
-        out = convolve2d(timeseries, tdw, window=window)
+    out = convolve(timeseries, tdw, window=window)
+        
+     # If input was 1D, return 1D
+    if is_1d:
+        out = out[0]
     
     return out * cupy.sqrt(dt)
