@@ -137,10 +137,10 @@ def fir_from_transfer(
         raise ValueError("ntaps must be an even number")
     
     transfer = truncate_transfer(transfer, ncorner=ncorner)
-    impulse = cupyx.scipy.fftpack.irfft(transfer)
+    impulse = cupyx.scipy.fftpack.irfft(transfer, overwrite_x=True)
     impulse = truncate_impulse(impulse, ntaps=ntaps, window=window)
     
-    impulse = cupy.roll(impulse, int(ntaps/2 - 1))[:, : ntaps]
+    impulse = cupy.roll(impulse, int(ntaps/2 - 1), axis=-1)[:, : ntaps]
     return impulse
 
 def convolve(
@@ -178,29 +178,28 @@ def convolve(
 
     conv = cupy.zeros_like(timeseries)
     if nfft >= timeseries.shape[-1]/2:
-        conv = cusignal.convolve(timeseries, fir, mode='same', method = 'fft')
+        conv = cusignal.fftconvolve(timeseries, fir, mode='same', axes = -1)
     else:
         nstep = nfft - 2*pad
-        conv[:, :nfft-pad] = cusignal.convolve(
+        conv[:, :nfft-pad] = cusignal.fftconvolve(
             timeseries[:, :nfft], 
             fir, 
             mode='same', 
-            method = 'fft'
-        )[:, :nfft-pad]
+            axes = -1)[:, :nfft-pad]
 
         k = nfft - pad
         while k < timeseries.shape[-1] - nfft + pad:
-            yk = cusignal.convolve(
+            yk = cusignal.fftconvolve(
                 timeseries[:, k-pad:k+nstep+pad], 
                 fir,
                 mode='same', 
-                method = 'fft'
+                axes = -1
             )
             conv[:, k:k+yk.shape[-1]-2*pad] = yk[:, pad:-pad]
             k += nstep
 
-        conv[:, -nfft+pad:] = cusignal.convolve(
-            timeseries[:, -nfft:], fir, mode='same', method = 'fft'
+        conv[:, -nfft+pad:] = cusignal.fftconvolve(
+            timeseries[:, -nfft:], fir, mode='same', axes = -1
         )[:, -nfft+pad:]
 
     return conv
@@ -327,7 +326,7 @@ def whiten(
     timeseries = cusignal.filtering.detrend(
         timeseries, type=detrend, overwrite_data=True
     )
-    
+        
     out = convolve(timeseries, tdw, window=window)
         
      # If input was 1D, return 1D

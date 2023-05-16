@@ -7,6 +7,8 @@ import cupy
 from cupyx.profiler import benchmark
 import timeit
 
+from dataset import get_ifo_data, O3
+
 import scipy
 
 import numpy as np
@@ -59,7 +61,7 @@ def plot_performance_comparison(cases_dict):
     p.legend.label_text_font_size = "10pt"
 
     # Save to HTML file
-    output_file("../performance_comparison.html")
+    output_file("../py_ml_data/performance_comparison.html")
     save(p)
 
 def plot_whitening_outputs(
@@ -91,7 +93,7 @@ def plot_whitening_outputs(
                x_axis_label='Time (s)', 
                y_axis_label='Amplitude')
     
-    colors = ("orange", "blue", "red", "purple")
+    colors = ("orange", "blue", "red", "purple", "green", "indigo", "violet")
     
     dodge = 7
     for i, (color, key) in enumerate(zip(colors, results.keys())):
@@ -160,10 +162,10 @@ def plot_whiten_functions(
     
     results = {"Original": data, "CuPy": whitened_cp, "GWPY": whitened_ts, "Residuals": residuals}
     
-    plot_whitening_outputs(t, results, "../whitening_outputs.html")  
+    plot_whitening_outputs(t, results, "../py_ml_data/whitening_outputs.html")  
     
     psd_results = {"Original": data_psd, "CuPy": cp_psd, "GWPY": ts_psd}
-    plot_whitening_outputs(f, psd_results, "../psd_outputs.html")  
+    plot_whitening_outputs(f, psd_results, "../py_ml_data/psd_outputs.html")  
     
 def test_whiten_functions():
     sample_rate = 8192
@@ -231,6 +233,69 @@ def test_whiten_performace(
     assert np.mean(performance_results["CuPy"].cpu_times) < np.mean(performance_results["GWPY"].cpu_times), "GPU version is not faster than CPU version"
     
     plot_performance_comparison(performance_results)
-
-
+    
 test_whiten_functions()
+    
+def real_noise_test():
+    sample_rate_hertz=1024
+    fftlength=1 
+    overlap=0.5
+    num_trials=10
+    
+    example_duration_seconds = 2.0
+    
+    background_noise_iterator = get_ifo_data(
+        time_interval = O3,
+        data_labels = ["noise", "glitches"],
+        ifo = "L1",
+        sample_rate_hertz = sample_rate_hertz,
+        example_duration_seconds = example_duration_seconds,
+        max_num_examples = 32,
+        num_examples_per_batch = 32,
+        order = "shortest_first",
+        apply_whitening = False
+    )
+    
+    background_noise_iterator_w = get_ifo_data(
+        time_interval = O3,
+        data_labels = ["noise", "glitches"],
+        ifo = "L1",
+        sample_rate_hertz = sample_rate_hertz,
+        example_duration_seconds = example_duration_seconds,
+        max_num_examples = 32,
+        num_examples_per_batch = 32,
+        order = "shortest_first",
+        apply_whitening = True
+    )
+    
+    for i, (noise_chunk, noise_chunk_w) in enumerate(zip(background_noise_iterator, background_noise_iterator_w)):
+        
+        # Convert the TensorFlow tensor to a NumPy array for plotting
+        data   = noise_chunk[0].numpy()
+        noise_chunk_w = noise_chunk_w[0].numpy()
+        
+        # Create a GWpy TimeSeries object
+        ts = TimeSeries(data, sample_rate=sample_rate_hertz)
+        whitened_ts = ts.whiten(fftlength=fftlength, overlap=overlap, fduration = 1.0).value
+
+        # Whitening using cupy-based function
+        timeseries = cupy.asarray(noise_chunk.numpy())
+        whitened_cp = whiten(timeseries, timeseries, sample_rate_hertz, fftlength=fftlength, overlap=overlap)
+        whitened_cp = cupy.asnumpy(whitened_cp[0])
+
+        # Calculate power spectral densities
+        f, data_psd = scipy.signal.csd(data, data, fs=sample_rate_hertz, window='hann', nperseg=int(sample_rate_hertz*fftlength), noverlap=int(sample_rate_hertz*overlap), average='median')
+        f, ts_psd = scipy.signal.csd(whitened_ts, whitened_ts, fs=sample_rate_hertz, window='hann', nperseg=int(sample_rate_hertz*fftlength), noverlap=int(sample_rate_hertz*overlap), average='median')
+        f, cp_psd = scipy.signal.csd(whitened_cp, whitened_cp, fs=sample_rate_hertz, window='hann', nperseg=int(sample_rate_hertz*fftlength), noverlap=int(sample_rate_hertz*overlap), average='median')
+        
+        residuals = np.abs(whitened_cp - whitened_ts)
+            
+        results = {"Original": data, "CuPy": whitened_cp, "GWPY": whitened_ts, "Residuals": residuals, "Generator": noise_chunk_w}
+        
+        t = np.linspace(0, example_duration_seconds, int(sample_rate_hertz*example_duration_seconds))
+        plot_whitening_outputs(t, results, "../py_ml_data/rn_whitening_outputs.html")  
+    
+        psd_results = {"Original": data_psd, "CuPy": cp_psd, "GWPY": ts_psd}
+        plot_whitening_outputs(f, psd_results, "../py_ml_data/rn_psd_outputs.html")  
+
+real_noise_test()

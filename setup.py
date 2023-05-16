@@ -27,3 +27,12 @@ def setup_cuda(
 		tf.config.list_physical_devices("GPU")
 		
 	return strategy
+
+def cupy_to_tensor(cupy_array):
+    # Convert CuPy array to DLPack
+    dlpack = cupy_array.toDlpack()
+
+    # Convert DLPack to TensorFlow tensor
+    tensor = tf.experimental.dlpack.from_dlpack(dlpack)
+
+    return tensor

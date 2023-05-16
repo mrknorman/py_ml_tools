@@ -3,6 +3,7 @@ from random import shuffle
 import random
 from typing import List, Tuple, Union
 from datetime import datetime
+import gc
 
 import numpy as np
 import hashlib
@@ -18,6 +19,7 @@ from datetime import datetime
 
 import cupy
 from whiten import whiten
+from setup import cupy_to_tensor
 import cusignal
 from cusignal.filtering.resample import decimate
 from cupyx.profiler import benchmark
@@ -88,7 +90,10 @@ class IFOData:
     def downsample(self, new_sample_rate: Union[int, float]):        
         factor = int(self.sample_rate / new_sample_rate)
 
-        self.data = decimate(self.data, factor)
+        new_data = decimate(self.data, factor)
+        del self.data  # release the memory     
+        self.data = new_data
+        
         self.sample_rate = new_sample_rate
         
         return self
@@ -237,6 +242,17 @@ def veto_time_periods(
     result = [time_period for valid_start, valid_end in valid_periods for time_period in remove_overlap(valid_start, valid_end, veto_periods) if time_period]
     return result
 
+def split_periods(periods: List[Tuple[int, int]], max_length: int) -> List[Tuple[int, int]]:
+    result = []
+    
+    for start, end in periods:
+        while end - start > max_length:
+            result.append((start, start + max_length))
+            start += max_length
+        result.append((start, end))
+        
+    return result
+
 def open_hdf5_file(
     file_path : Union[str, Path], 
     mode : str ='r+'
@@ -279,17 +295,21 @@ def get_ifo_data(
     max_num_examples: float = 0.0,
     apply_whitening: bool = False,
     num_examples_per_batch: int = 1,
-    scale_factor: float = 1.0,
+    scale_factor: float = 1.0e20,
     order: str = "random",
     seed: int = 1000,
     force_generation: bool = False,
-    data_directory: Union[str, Path] = "../generator_data"
+    data_directory: Union[str, Path] = "../generator_data",
+    fduration = 1.0
 ):
     data_directory = Path(data_directory)
     ensure_directory_exists(data_directory)
     
     tf.random.set_seed(seed)
     random.seed(seed)
+    
+    mempool = cupy.get_default_memory_pool()
+    pinned_mempool = cupy.get_default_pinned_memory_pool()
     
     def get_new_segment_data(segment_start, segment_end):
         files = find_urls(
@@ -346,6 +366,7 @@ def get_ifo_data(
         pass
 
     valid_segments = veto_time_periods(valid_segments, veto_segments)
+    valid_segments = split_periods(valid_segments, 3600)
 
     if order == "random":
         shuffle(valid_segments)
@@ -355,7 +376,7 @@ def get_ifo_data(
         pass
 
     current_example_index = 0
-    
+
     with open_hdf5_file(segment_filename) as f:
         
         f.require_group("segments")
@@ -388,25 +409,43 @@ def get_ifo_data(
             current_segment_data = current_segment_data.scale(scale_factor)                
 
             for _ in range(current_max_batch_count):
-                num_subsection_elements = int(example_duration_seconds * sample_rate_hertz)
+                num_subsection_elements = int((example_duration_seconds + fduration) * sample_rate_hertz)
                 num_background_elements = int(background_duration_seconds * sample_rate_hertz)
                 batched_examples = current_segment_data.random_subsection(num_subsection_elements, num_background_elements, num_examples_per_batch)
-                
+                                
                 # Injection, projection
-                
-                
-                print(batched_examples[0].shape)
                 if apply_whitening:
                     #cusignal.spectral_analysis.spectral.csd(batched_examples[1], batched_examples[1])
-                    batched_examples = whiten(batched_examples[0], batched_examples[1], sample_rate_hertz, fftlength = 1.0, overlap = 0.5, fduration = 1.0)                        
-                print(batched_examples.shape)
-
-                quit()
-
+                    batched_examples = whiten(
+                        batched_examples[0], 
+                        batched_examples[1], 
+                        sample_rate_hertz, 
+                        fftlength = 1.0,
+                        overlap = 0.5,
+                        fduration = fduration)  
+                else: 
+                    batched_examples = batched_examples[0]
+                    
+                # Crop to remove edge effects, crop with or without whitening to
+                # ensure same data is retrieve in both cases
+                desired_num_samples = int(example_duration_seconds * sample_rate_hertz)
+                start = (batched_examples.shape[-1] - desired_num_samples) // 2
+                end = start + desired_num_samples
+                batched_examples = batched_examples[:, start:end]
+                batched_examples = cupy.ascontiguousarray(batched_examples)
+                
                 current_example_index += num_examples_per_batch;
 
                 if (max_num_examples > 0) and (current_example_index > max_num_examples):
                     return
-
-                yield batched_examples
+                
+                yield cupy_to_tensor(batched_examples)
+            
+            gc.collect()
+            mempool.free_all_blocks()
+            pinned_mempool.free_all_blocks()
+            
+            print(mempool.used_bytes())          
+            print(mempool.total_bytes())         
+            print(pinned_mempool.n_free_blocks())
 
