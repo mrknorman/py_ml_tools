@@ -1,6 +1,4 @@
 from dataclasses import dataclass
-from random import shuffle
-import random
 from typing import List, Tuple, Union
 from datetime import datetime
 import gc
@@ -93,6 +91,7 @@ class IFOData:
         new_data = decimate(self.data, factor)
         del self.data  # release the memory     
         self.data = new_data
+        gc.collect()
         
         self.sample_rate = new_sample_rate
         
@@ -137,9 +136,7 @@ def get_segment_times(
     start: float,
     stop: float,
     ifo: str,
-    state_flag: str,
-    minimum_duration: float,
-    verbosity: int
+    state_flag: str
     ) -> list:
     
     segments = DataQualityDict.query_dqsegdb(
@@ -147,19 +144,11 @@ def get_segment_times(
         start,
         stop,
     )
-
+    
     intersection = segments[f"{ifo}:{state_flag}"].active.copy()
     
-    valid_segments = []
-    for seg_start, seg_stop in intersection:
-        if (seg_stop - seg_start) >= minimum_duration:
-            valid_segments.append((seg_start, seg_stop))
-
-    if not valid_segments and (verbosity >= 1):
-        raise ValueError("No segments of minimum length.")
+    return np.array(intersection)
     
-    return valid_segments
-
 def get_all_event_times() -> np.ndarray:
     
     catalogues = [
@@ -185,73 +174,58 @@ def pad_gps_times_with_veto_window(
         arr: np.ndarray, 
         offset: int = 60, 
         increment: int = 10
-    ) -> list:
+    ) -> np.ndarray:
     left = arr - offset
     right = arr + increment
     result = np.stack((left, right), axis=1)
-    tuple_result = [tuple(pair) for pair in result]
-    return tuple_result
+    return result
 
-def compress_periods(
-    periods: List[Tuple[float, float]]
-    ) -> List[Tuple[float, float]]:
-    
-    sorted_periods = sorted(periods, key=lambda x: x[0])
+def compress_periods(periods: np.ndarray) -> np.ndarray:
+    periods = periods[periods[:,0].argsort()]
     compressed = []
 
-    for period in sorted_periods:
+    for period in periods:
         if not compressed or compressed[-1][1] < period[0]:
             compressed.append(period)
         else:
             compressed[-1] = (compressed[-1][0], max(compressed[-1][1], period[1]))
 
-    return compressed
+    return np.array(compressed)
 
-def remove_overlap(
-    start: float, 
-    end: float, 
-    veto_periods: List[Tuple[float, float]]
-    ) -> List[Tuple[float, float]]:
-    
-    result = [(start, end)]
+def remove_overlap(start: float, end: float, veto_periods: np.ndarray) -> np.ndarray:
+    result = np.array([[start, end]])
     for veto_start, veto_end in veto_periods:
         new_result = []
         for period_start, period_end in result:
             if period_start < veto_start < period_end and period_start < veto_end < period_end:
-                new_result.append((period_start, veto_start))
-                new_result.append((veto_end, period_end))
+                new_result.append([period_start, veto_start])
+                new_result.append([veto_end, period_end])
             elif veto_start <= period_start < veto_end < period_end:
-                new_result.append((veto_end, period_end))
+                new_result.append([veto_end, period_end])
             elif period_start < veto_start < period_end <= veto_end:
-                new_result.append((period_start, veto_start))
-            elif not (veto_end <= period_start or period_end <= veto_start):
-                continue
-            else:
-                new_result.append((period_start, period_end))
-        result = new_result
+                new_result.append([period_start, veto_start])
+            elif veto_end <= period_start or period_end <= veto_start:
+                new_result.append([period_start, period_end])
+        result = np.array(new_result)
     return result
 
-def veto_time_periods(
-    valid_periods: List[Tuple[float, float]], 
-    veto_periods: List[Tuple[float, float]]
-    ) -> List[Tuple[float, float]]:
-    
+def veto_time_periods(valid_periods: np.ndarray, veto_periods: np.ndarray) -> np.ndarray:
     valid_periods = compress_periods(valid_periods)
     veto_periods = compress_periods(veto_periods)
-    
-    result = [time_period for valid_start, valid_end in valid_periods for time_period in remove_overlap(valid_start, valid_end, veto_periods) if time_period]
+    result = np.vstack([remove_overlap(valid_start, valid_end, veto_periods) for valid_start, valid_end in valid_periods])
     return result
 
-def split_periods(periods: List[Tuple[int, int]], max_length: int) -> List[Tuple[int, int]]:
+def split_periods(periods: np.ndarray, max_length: float) -> np.ndarray:
     result = []
-    
     for start, end in periods:
-        while end - start > max_length:
-            result.append((start, start + max_length))
-            start += max_length
-        result.append((start, end))
-        
-    return result
+        n_splits = int(np.ceil((end - start) / max_length))
+        starts = np.linspace(start, start + max_length * (n_splits - 1), n_splits)
+        ends = np.minimum(starts + max_length, end)
+        result.append(np.vstack((starts, ends)).T)
+    return np.vstack(result)
+
+def remove_short_periods(periods: np.ndarray, min_length: float) -> np.ndarray:
+    return periods[np.where(periods[:, 1] - periods[:, 0] >= min_length)]
 
 def open_hdf5_file(
     file_path : Union[str, Path], 
@@ -296,17 +270,19 @@ def get_ifo_data(
     apply_whitening: bool = False,
     num_examples_per_batch: int = 1,
     scale_factor: float = 1.0e20,
+    max_segment_size = 2000,
     order: str = "random",
     seed: int = 1000,
     force_generation: bool = False,
     data_directory: Union[str, Path] = "../generator_data",
+    save_segment_data: bool = False,
     fduration = 1.0
 ):
     data_directory = Path(data_directory)
     ensure_directory_exists(data_directory)
     
-    tf.random.set_seed(seed)
-    random.seed(seed)
+    cupy.random.seed(seed=seed)
+    np.random.seed(seed)
     
     mempool = cupy.get_default_memory_pool()
     pinned_mempool = cupy.get_default_pinned_memory_pool()
@@ -319,7 +295,6 @@ def get_ifo_data(
             gpsend=segment_end,
             urltype="file",
         )
-
         data = TimeSeries.read(
             files, channel=f"{ifo}:{channel}", start=segment_start, end=segment_end, nproc=4
         )
@@ -350,28 +325,37 @@ def get_ifo_data(
         start,
         stop,
         ifo,
-        state_flag,
-        example_duration_seconds*num_examples_per_batch + background_duration_seconds,
-        0
+        state_flag
     )
     
     veto_segments = []
     if "events" not in data_labels:
         event_times = get_all_event_times()
-        veto_segments += pad_gps_times_with_veto_window(event_times)
+        veto_segments.append(pad_gps_times_with_veto_window(event_times))
     if "glitches" not in data_labels:
         #glitches = EventTable.fetch('gravityspy', 'glitches')
         #print(glitches)
         print("Glitch vetos not implemented!")
         pass
+    
+    veto_segments = np.concatenate(veto_segments)
 
     valid_segments = veto_time_periods(valid_segments, veto_segments)
-    valid_segments = split_periods(valid_segments, 3600)
+    valid_segments = split_periods(valid_segments, max_segment_size)
+    valid_segments = remove_short_periods(
+        valid_segments, 
+        (example_duration_seconds + fduration)*num_examples_per_batch 
+        + background_duration_seconds
+    )
+    
+    if (len(valid_segments) == 0) and (verbosity >= 1):
+        raise ValueError("No valid segments!")
 
     if order == "random":
-        shuffle(valid_segments)
+        np.random.shuffle(valid_segments)
     elif order == "shortest_first":
-        valid_segments = sorted(valid_segments, key=lambda duration: duration[1] - duration[0])
+        sort_by_duration = lambda segments: segments[np.argsort(segments[:, 1] - segments[:, 0])]
+        valid_segments = sort_by_duration(valid_segments)
     elif order == "chronological":
         pass
 
@@ -388,43 +372,45 @@ def get_ifo_data(
             current_segment_data = None
 
             if segment_key in f:
-                timeseries_data = f[segment_key][()] 
-                current_segment_data = IFOData(timeseries_data, current_segment_start, sample_rate_hertz)
+                print(f"Reading segments of duration {current_segment_end - current_segment_start}...")
+                current_segment_data = IFOData(f[segment_key][()], current_segment_start, sample_rate_hertz)
             else: 
-
-                print(f"Loading segments of duration {current_segment_end - current_segment_start}...")
-
+                print(f"Acquiring segments of duration {current_segment_end - current_segment_start}...")
                 try:
-                    timeseries_data = get_new_segment_data(current_segment_start, current_segment_end)
+                    current_segment_data = get_new_segment_data(current_segment_start, current_segment_end)
                 except Exception as e:
                     print(f"Unexpected error: {type(e).__name__}, {str(e)}")
                     continue
-
-                print("Complete!")
-
-                current_segment_data = IFOData(timeseries_data, timeseries_data.t0.value, timeseries_data.sample_rate.value)
-                current_segment_data = current_segment_data.downsample(sample_rate_hertz)            
-                f.create_dataset(segment_key, data = current_segment_data.numpy())
+                
+                current_segment_data = \
+                    IFOData(
+                        current_segment_data, 
+                        current_segment_data.t0.value, 
+                        current_segment_data.sample_rate.value
+                    )
+                current_segment_data = current_segment_data.downsample(sample_rate_hertz) 
+                
+                if save_segment_data:
+                    f.create_dataset(segment_key, data = current_segment_data.numpy())
+            print("Complete!")
 
             current_segment_data = current_segment_data.scale(scale_factor)                
 
             for _ in range(current_max_batch_count):
                 num_subsection_elements = int((example_duration_seconds + fduration) * sample_rate_hertz)
                 num_background_elements = int(background_duration_seconds * sample_rate_hertz)
-                batched_examples = current_segment_data.random_subsection(num_subsection_elements, num_background_elements, num_examples_per_batch)
+                batched_examples, batched_backgrounds, batched_gps_times = current_segment_data.random_subsection(num_subsection_elements, num_background_elements, num_examples_per_batch)
                                 
                 # Injection, projection
                 if apply_whitening:
                     #cusignal.spectral_analysis.spectral.csd(batched_examples[1], batched_examples[1])
                     batched_examples = whiten(
-                        batched_examples[0], 
-                        batched_examples[1], 
+                        batched_examples, 
+                        batched_backgrounds, 
                         sample_rate_hertz, 
                         fftlength = 1.0,
                         overlap = 0.5,
-                        fduration = fduration)  
-                else: 
-                    batched_examples = batched_examples[0]
+                        fduration = fduration)
                     
                 # Crop to remove edge effects, crop with or without whitening to
                 # ensure same data is retrieve in both cases
@@ -435,17 +421,14 @@ def get_ifo_data(
                 batched_examples = cupy.ascontiguousarray(batched_examples)
                 
                 current_example_index += num_examples_per_batch;
-
+                
                 if (max_num_examples > 0) and (current_example_index > max_num_examples):
                     return
                 
                 yield cupy_to_tensor(batched_examples)
             
+            del current_segment_data
             gc.collect()
             mempool.free_all_blocks()
             pinned_mempool.free_all_blocks()
-            
-            print(mempool.used_bytes())          
-            print(mempool.total_bytes())         
-            print(pinned_mempool.n_free_blocks())
 
