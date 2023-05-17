@@ -276,6 +276,7 @@ def get_ifo_data(
     force_generation: bool = False,
     data_directory: Union[str, Path] = "../generator_data",
     save_segment_data: bool = False,
+    return_keys = ["data", "background", "gps_time"],
     fduration = 1.0
 ):
     data_directory = Path(data_directory)
@@ -425,10 +426,41 @@ def get_ifo_data(
                 if (max_num_examples > 0) and (current_example_index > max_num_examples):
                     return
                 
-                yield cupy_to_tensor(batched_examples)
+                return_dict = {}
+                if 'data' in return_keys:
+                    return_dict['data'] = tf.cast(cupy_to_tensor(batched_examples), tf.float16)
+                if 'background' in return_keys:
+                    return_dict['background'] = tf.cast(cupy_to_tensor(batched_backgrounds), tf.float16)
+                if 'gps_time' in return_keys:
+                    return_dict['gps_time'] = tf.convert_to_tensor(batched_gps_times, dtype=tf.int64)
+                
+                yield return_dict
             
             del current_segment_data
             gc.collect()
             mempool.free_all_blocks()
             pinned_mempool.free_all_blocks()
 
+def get_ifo_data_generator(
+    time_interval: Union[tuple, ObservingRun], 
+    data_labels: List[str], 
+    ifo: str,
+    sample_rate_hertz: float,    
+    return_keys = ["data", "background", "gps_time"],
+    **kwargs  # Capture all other arguments
+    ):
+    
+    output_signature = {
+        'data'      : tf.TensorSpec(shape=(kwargs.get('num_examples_per_batch', 1), int(kwargs.get('example_duration_seconds', 1.0)*sample_rate_hertz)), dtype=tf.float16),
+        'background': tf.TensorSpec(shape=(kwargs.get('num_examples_per_batch', 1), int(kwargs.get('background_duration_seconds', 16.0)*sample_rate_hertz)), dtype=tf.float16),
+        'gps_time'  : tf.TensorSpec(shape=(kwargs.get('num_examples_per_batch', 1)), dtype=tf.int64),
+    }
+    
+    output_signature = {k: output_signature[k] for k in return_keys}
+    
+    generator = lambda: get_ifo_data(time_interval, data_labels, ifo, sample_rate_hertz, return_keys = return_keys, **kwargs)
+    
+    return tf.data.Dataset.from_generator(
+            generator = generator,
+            output_signature = output_signature
+        )

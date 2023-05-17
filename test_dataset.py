@@ -1,4 +1,4 @@
-from dataset import get_ifo_data, O3
+from dataset import get_ifo_data_generator, get_ifo_data, O3
 from setup import setup_cuda
 from bokeh.plotting import figure, output_file, show
 
@@ -22,7 +22,7 @@ def test_noise():
         print(i*32)
         
         # Convert the TensorFlow tensor to a NumPy array for plotting
-        numpy_array = noise_chunk[0].numpy()
+        numpy_array = noise_chunk["data"][0].numpy()
 
         # Output to an HTML file
         output_file("../py_ml_data/noise_test.html")
@@ -37,7 +37,7 @@ def test_noise():
         show(p)
         
         # Convert the TensorFlow tensor to a NumPy array for plotting
-        numpy_array = noise_chunk[1].numpy()
+        numpy_array = noise_chunk["data"][1].numpy()
 
         # Output to an HTML file
         output_file("../py_ml_data/noise_test_1.html")
@@ -51,7 +51,7 @@ def test_noise():
         # Show the results
         show(p)
         
-    background_noise_iterator = get_ifo_data(
+    ifo_data_generator_tf = get_ifo_data_generator(
         time_interval = O3,
         data_labels = ["noise", "glitches"],
         ifo = "L1",
@@ -60,10 +60,24 @@ def test_noise():
         max_num_examples = 1e6,
         num_examples_per_batch = 32,
         order = "random",
-        apply_whitening = True
+        apply_whitening = True,
+        return_keys = ["data"]
     )
     
-    for i, noise_chunk in enumerate(background_noise_iterator):
+    ifo_data_generator = get_ifo_data(
+        time_interval = O3,
+        data_labels = ["noise", "glitches"],
+        ifo = "L1",
+        sample_rate_hertz = 8*1024.0,
+        example_duration_seconds = 1.0,
+        max_num_examples = 1e6,
+        num_examples_per_batch = 32,
+        order = "random",
+        apply_whitening = True,
+        return_keys = ["data"]
+    )
+    
+    for i, noise_chunk in enumerate(ifo_data_generator_tf):
         print(i*32)
         
         
