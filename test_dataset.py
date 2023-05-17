@@ -10,6 +10,7 @@ def test_noise():
         ifo = "L1",
         sample_rate_hertz = 8*1024.0,
         example_duration_seconds = 1.0,
+        max_segment_size = 1000,
         max_num_examples = 32,
         num_examples_per_batch = 32,
         order = "random",
@@ -57,6 +58,7 @@ def test_noise():
         ifo = "L1",
         sample_rate_hertz = 8*1024.0,
         example_duration_seconds = 1.0,
+        max_segment_size = 1000,
         max_num_examples = 1e6,
         num_examples_per_batch = 32,
         order = "random",
@@ -77,12 +79,13 @@ def test_noise():
         return_keys = ["data"]
     )
     
-    for i, noise_chunk in enumerate(ifo_data_generator_tf):
-        print(i*32)
+    with strategy.scope():
+        for i, noise_chunk in enumerate(ifo_data_generator):
+            print(i*32)
         
         
 if __name__ == "__main__":
-    setup_cuda("5")
+    strategy = setup_cuda("0", verbose = True)
     test_noise()
 
     

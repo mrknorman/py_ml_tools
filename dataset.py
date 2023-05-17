@@ -17,12 +17,15 @@ from datetime import datetime
 
 import cupy
 from whiten import whiten
-from setup import cupy_to_tensor
+from setup import cupy_to_tensor, tensor_to_cupy, tf_to_cp_decorator
 import cusignal
 from cusignal.filtering.resample import decimate
 from cupyx.profiler import benchmark
 
 import h5py
+
+whiten   = tf_to_cp_decorator(2)(whiten)
+#decimate = tf_to_cp_decorator(1)(decimate)
 
 @dataclass
 class ObservingRun:
@@ -72,29 +75,26 @@ O3 = OBSERVING_RUNS["O3"]
 
 @dataclass
 class IFOData:
-    data        : Union[TimeSeries, cupy.ndarray, np.ndarray]
+    data        : Union[TimeSeries, np.ndarray]
     t0          : float
     sample_rate : float
     
     def __post_init__(self):
         if (type(self.data) == TimeSeries):
-            self.data = cupy.asarray(self.data.value, dtype=cupy.float32)
+            self.data = tf.convert_to_tensor(self.data.value, dtype=tf.float32)
         elif (type(self.data) == np.ndarray):
-            self.data = cupy.asarray(self.data, dtype=cupy.float32)
+            self.data = tf.convert_to_tensor(self.data, dtype=tf.float32)
         
         self.duration = len(self.data)/self.sample_rate
         self.dt = 1.0/self.sample_rate
             
     def downsample(self, new_sample_rate: Union[int, float]):        
-        factor = int(self.sample_rate / new_sample_rate)
-
-        new_data = decimate(self.data, factor)
-        del self.data  # release the memory     
-        self.data = new_data
-        gc.collect()
-        
+        factor = int(self.sample_rate / new_sample_rate)  
+        cp_data = tensor_to_cupy(self.data)
+        cp_data = decimate(self.data, factor)  
+        cp_data = cupy_to_tensor(cp_data) 
+        self.data = cp_data
         self.sample_rate = new_sample_rate
-        
         return self
     
     def scale(self, scale_factor:  Union[int, float]):
@@ -103,9 +103,14 @@ class IFOData:
     
     def numpy(self):
         """Converts the data to a numpy array."""
-        return cupy.asnumpy(self.data)
+        return self.data.numpy()
     
-    def random_subsection(self, num_subsection_elements: int, num_background_elements: int, num_examples_per_batch: int):      
+    def random_subsection(
+        self, 
+        num_subsection_elements: int, 
+        num_background_elements: int, 
+        num_examples_per_batch: int
+    ):      
         # Check if the input array is 1D
         assert len(self.data.shape) == 1, "Input array must be 1D"
 
@@ -117,18 +122,18 @@ class IFOData:
 
         # Generate a random starting index for each element in the batch
         maxval = N - num_subsection_elements - num_background_elements + 1
-        random_starts = cupy.random.randint(num_background_elements, maxval, size=(num_examples_per_batch,))
+        random_starts = tf.random.uniform(shape=(num_examples_per_batch,), minval=num_background_elements, maxval=maxval, dtype=tf.int32)
 
         # Extract the subsections of the array for the entire batch
-        indices = cupy.expand_dims(cupy.arange(num_subsection_elements), 0) + random_starts[:, cupy.newaxis]
-        batch_subarrays = self.data[indices]
+        indices = tf.expand_dims(tf.range(num_subsection_elements), 0) + tf.expand_dims(random_starts, -1)
+        batch_subarrays = tf.gather(self.data, indices)
 
         # Extract the background chunks of the array for the entire batch
-        bg_indices = cupy.expand_dims(cupy.arange(num_background_elements), 0) + (random_starts - num_background_elements)[:, cupy.newaxis]
-        batch_background_chunks = self.data[bg_indices]
+        bg_indices = tf.expand_dims(tf.range(num_background_elements), 0) + (tf.expand_dims(random_starts, -1) - num_background_elements)
+        batch_background_chunks = tf.gather(self.data, bg_indices)
 
         # Calculate the t0 for each captured subsection
-        t0_subsections = self.t0 + cupy.asnumpy(random_starts).astype(cupy.float32) * self.dt
+        t0_subsections = self.t0 + tf.cast(random_starts, dtype=tf.float32) * self.dt
 
         return batch_subarrays, batch_background_chunks, t0_subsections
     
@@ -253,6 +258,7 @@ def ensure_directory_exists(
     directory = Path(directory)  # Convert to Path if not already
     if not directory.exists():
         directory.mkdir(parents=True, exist_ok=True)
+        
 
 def get_ifo_data(
     time_interval: Union[tuple, ObservingRun], 
@@ -277,16 +283,13 @@ def get_ifo_data(
     data_directory: Union[str, Path] = "../generator_data",
     save_segment_data: bool = False,
     return_keys = ["data", "background", "gps_time"],
-    fduration = 1.0
+    fduration = 1.0,
 ):
     data_directory = Path(data_directory)
     ensure_directory_exists(data_directory)
     
-    cupy.random.seed(seed=seed)
+    tf.random.set_seed(seed)
     np.random.seed(seed)
-    
-    mempool = cupy.get_default_memory_pool()
-    pinned_mempool = cupy.get_default_pinned_memory_pool()
     
     def get_new_segment_data(segment_start, segment_end):
         files = find_urls(
@@ -419,7 +422,6 @@ def get_ifo_data(
                 start = (batched_examples.shape[-1] - desired_num_samples) // 2
                 end = start + desired_num_samples
                 batched_examples = batched_examples[:, start:end]
-                batched_examples = cupy.ascontiguousarray(batched_examples)
                 
                 current_example_index += num_examples_per_batch;
                 
@@ -428,9 +430,9 @@ def get_ifo_data(
                 
                 return_dict = {}
                 if 'data' in return_keys:
-                    return_dict['data'] = tf.cast(cupy_to_tensor(batched_examples), tf.float16)
+                    return_dict['data'] = tf.cast(batched_examples, tf.float16)
                 if 'background' in return_keys:
-                    return_dict['background'] = tf.cast(cupy_to_tensor(batched_backgrounds), tf.float16)
+                    return_dict['background'] = tf.cast(batched_backgrounds, tf.float16)
                 if 'gps_time' in return_keys:
                     return_dict['gps_time'] = tf.convert_to_tensor(batched_gps_times, dtype=tf.int64)
                 
@@ -438,8 +440,6 @@ def get_ifo_data(
             
             del current_segment_data
             gc.collect()
-            mempool.free_all_blocks()
-            pinned_mempool.free_all_blocks()
 
 def get_ifo_data_generator(
     time_interval: Union[tuple, ObservingRun], 
@@ -449,6 +449,8 @@ def get_ifo_data_generator(
     return_keys = ["data", "background", "gps_time"],
     **kwargs  # Capture all other arguments
     ):
+    
+    """Currently WORKS MUCH WORSE THAN USING ITERATOR"""
     
     output_signature = {
         'data'      : tf.TensorSpec(shape=(kwargs.get('num_examples_per_batch', 1), int(kwargs.get('example_duration_seconds', 1.0)*sample_rate_hertz)), dtype=tf.float16),
