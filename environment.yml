@@ -1,4 +1,4 @@
-name: rapids-23.04
+name: gryphon
 channels:
   - nvidia
   - rapidsai

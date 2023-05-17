@@ -16,8 +16,8 @@ from dataclasses import dataclass
 from datetime import datetime
 
 import cupy
-from whiten import whiten
-from setup import cupy_to_tensor
+from .whiten import whiten
+from .setup import cupy_to_tensor
 import cusignal
 from cusignal.filtering.resample import decimate
 from cupyx.profiler import benchmark
