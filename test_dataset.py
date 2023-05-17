@@ -2,6 +2,9 @@ from dataset import get_ifo_data_generator, get_ifo_data, O3
 from setup import setup_cuda
 from bokeh.plotting import figure, output_file, show
 
+import cupy as cp
+import tensorflow as tf
+
 def test_noise():
             
     background_noise_iterator = get_ifo_data(
@@ -57,12 +60,13 @@ def test_noise():
         ifo = "L1",
         sample_rate_hertz = 8*1024.0,
         example_duration_seconds = 1.0,
+        max_segment_size = 3600,
         max_num_examples = 1e6,
         num_examples_per_batch = 32,
         order = "random",
         apply_whitening = True,
         return_keys = ["data"]
-    )
+    ).prefetch(tf.data.AUTOTUNE)
     
     ifo_data_generator = get_ifo_data(
         time_interval = O3,
@@ -70,19 +74,24 @@ def test_noise():
         ifo = "L1",
         sample_rate_hertz = 8*1024.0,
         example_duration_seconds = 1.0,
+        max_segment_size = 3600,
         max_num_examples = 1e6,
         num_examples_per_batch = 32,
         order = "random",
         apply_whitening = True,
         return_keys = ["data"]
     )
-    
-    for i, noise_chunk in enumerate(ifo_data_generator_tf):
+
+    for i, noise_chunk in enumerate(ifo_data_generator):
         print(i*32)
         
         
 if __name__ == "__main__":
-    setup_cuda("5")
+    setup_cuda("0", verbose = True)    
+
+    mempool = cp.get_default_memory_pool()
+    mempool.set_limit(size=4*1024**3)  # 1 GiB
+
     test_noise()
 
     

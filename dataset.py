@@ -285,9 +285,6 @@ def get_ifo_data(
     cupy.random.seed(seed=seed)
     np.random.seed(seed)
     
-    mempool = cupy.get_default_memory_pool()
-    pinned_mempool = cupy.get_default_pinned_memory_pool()
-    
     def get_new_segment_data(segment_start, segment_end):
         files = find_urls(
             site=ifo.strip("1"),
@@ -372,7 +369,7 @@ def get_ifo_data(
                             
             current_segment_data = None
 
-            if segment_key in f:
+            if (segment_key in f) and save_segment_data:
                 print(f"Reading segments of duration {current_segment_end - current_segment_start}...")
                 current_segment_data = IFOData(f[segment_key][()], current_segment_start, sample_rate_hertz)
             else: 
@@ -435,11 +432,6 @@ def get_ifo_data(
                     return_dict['gps_time'] = tf.convert_to_tensor(batched_gps_times, dtype=tf.int64)
                 
                 yield return_dict
-            
-            del current_segment_data
-            gc.collect()
-            mempool.free_all_blocks()
-            pinned_mempool.free_all_blocks()
 
 def get_ifo_data_generator(
     time_interval: Union[tuple, ObservingRun], 
