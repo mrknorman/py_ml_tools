@@ -1,5 +1,5 @@
-from dataset import get_ifo_data_generator, get_ifo_data, O3
-from setup import setup_cuda
+from .dataset import get_ifo_data_generator, get_ifo_data, O3
+from .setup import setup_cuda
 from bokeh.plotting import figure, output_file, show
 
 import cupy as cp
@@ -19,6 +19,7 @@ def test_noise():
         apply_whitening = True
     )
     
+    """
     for i, noise_chunk in enumerate(background_noise_iterator):
         
         print(noise_chunk)
@@ -53,6 +54,7 @@ def test_noise():
 
         # Show the results
         show(p)
+    """
         
     ifo_data_generator_tf = get_ifo_data_generator(
         time_interval = O3,
