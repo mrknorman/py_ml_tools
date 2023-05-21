@@ -3,6 +3,7 @@ import logging
 import tensorflow as tf
 from tensorflow.python.distribute.distribute_lib import Strategy
 from cupy import ndarray as cupy_ndarray
+import cupy
 from tensorflow.python.framework.ops import EagerTensor
 
 def setup_cuda(device_num: str, verbose: bool = False) -> Strategy:
