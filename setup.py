@@ -44,7 +44,7 @@ def setup_cuda(device_num: str, verbose: bool = False) -> Strategy:
                 tf.config.experimental.set_memory_growth(gpu, True)
         except RuntimeError as e:
             # This needs to be set before initializing GPUs.
-            logging.error("Failed to set memory growth: GPUs must be initialized first. Error message: {e}")
+            logging.error(f"Failed to set memory growth: GPUs must be initialized first. Error message: {e}")
             raise
 
     # MirroredStrategy performs synchronous distributed training on multiple GPUs on one machine.
