@@ -29,7 +29,7 @@ def test_noise():
         numpy_array = noise_chunk["data"][0].numpy()
 
         # Output to an HTML file
-        output_file("../py_ml_data/noise_test.html")
+        output_file("./py_ml_data/noise_test.html")
 
         # Create a new plot with a title and axis labels
         p = figure(title="Tensor plot", x_axis_label='x', y_axis_label='y')
@@ -44,7 +44,7 @@ def test_noise():
         numpy_array = noise_chunk["data"][1].numpy()
 
         # Output to an HTML file
-        output_file("../py_ml_data/noise_test_1.html")
+        output_file("./py_ml_data/noise_test_1.html")
 
         # Create a new plot with a title and axis labels
         p = figure(title="Tensor plot", x_axis_label='x', y_axis_label='y')
@@ -63,7 +63,7 @@ def test_noise():
         sample_rate_hertz = 8*1024.0,
         example_duration_seconds = 1.0,
         max_segment_size = 3600,
-        max_num_examples = 1e6,
+        max_num_examples = 1e4,
         num_examples_per_batch = 32,
         order = "random",
         apply_whitening = True,
@@ -77,15 +77,16 @@ def test_noise():
         sample_rate_hertz = 8*1024.0,
         example_duration_seconds = 1.0,
         max_segment_size = 3600,
-        max_num_examples = 1e6,
+        max_num_examples = 1e4,
         num_examples_per_batch = 32,
         order = "random",
         apply_whitening = True,
         return_keys = ["data"]
     )
-
-    for i, noise_chunk in enumerate(ifo_data_generator):
-        print(i*32)
+    
+    for i in range(2):
+        for i, noise_chunk in enumerate(ifo_data_generator_tf):
+            print(i*32)
         
         
 if __name__ == "__main__":

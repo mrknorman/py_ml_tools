@@ -274,7 +274,7 @@ def get_ifo_data(
     order: str = "random",
     seed: int = 1000,
     force_generation: bool = False,
-    data_directory: Union[str, Path] = "../generator_data",
+    data_directory: Union[str, Path] = "./generator_data",
     save_segment_data: bool = False,
     return_keys = ["data", "background", "gps_time"],
     fduration = 1.0
@@ -391,9 +391,9 @@ def get_ifo_data(
                 if save_segment_data:
                     f.create_dataset(segment_key, data = current_segment_data.numpy())
             print("Complete!")
-
-            current_segment_data = current_segment_data.scale(scale_factor)                
-
+            
+            current_segment_data = current_segment_data.scale(scale_factor)          
+            
             for _ in range(current_max_batch_count):
                 num_subsection_elements = int((example_duration_seconds + fduration) * sample_rate_hertz)
                 num_background_elements = int(background_duration_seconds * sample_rate_hertz)
@@ -402,6 +402,7 @@ def get_ifo_data(
                 # Injection, projection
                 if apply_whitening:
                     #cusignal.spectral_analysis.spectral.csd(batched_examples[1], batched_examples[1])
+                    
                     batched_examples = whiten(
                         batched_examples, 
                         batched_backgrounds, 

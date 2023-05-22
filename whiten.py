@@ -3,6 +3,9 @@ import cusignal
 import cupy
 import cupyx
 
+from bokeh.plotting import figure, save, output_file
+
+
 def planck(N: int, nleft: int, nright: int) -> cupy.ndarray:
     """
     Create a Planck-taper window.
@@ -297,7 +300,6 @@ def whiten(
         background = background[None, :]
     
     dt = 1 / sample_rate
-            
     freqs, psd = \
         cusignal.spectral_analysis.spectral.csd(
             background, 
@@ -307,9 +309,9 @@ def whiten(
             nperseg=int(sample_rate*fftlength), 
             noverlap=int(sample_rate*overlap), 
             average='median')
-    
+        
     asd = cupy.sqrt(psd)
-    
+        
     df = 1.0 / (timeseries.shape[-1] / sample_rate)
         
     fsamples = cupy.arange(0, timeseries.shape[-1]//2+1) * df
@@ -323,6 +325,21 @@ def whiten(
     transfer = 1.0 / asd
             
     tdw = fir_from_transfer(transfer, ntaps, window=window, ncorner=ncorner)
+
+    """
+    print("cupy", tdw)
+    # Step 4: Plot the results using bokeh
+    p = figure(title="PSD: power spectral density", x_axis_label='Frequency', y_axis_label='Power Spectral Density', 
+               y_axis_type="log", plot_width=800, plot_height=400)
+    import numpy as np
+    p.line(np.arange(len(cupy.asnumpy(tdw[0]))), cupy.asnumpy(tdw[0]), legend_label="scipy", line_color="blue")
+        
+    # Specify the output file and save the plot
+    output_file("./py_ml_data/whiten_cupy_asd.html")
+    save(p)
+    
+    """
+    
     timeseries = cusignal.filtering.detrend(
         timeseries, type=detrend, overwrite_data=True
     )

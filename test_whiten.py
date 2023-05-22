@@ -1,4 +1,5 @@
-from whiten import whiten
+from .whiten import whiten
+from .whiten_tf import whiten as whiten_tf
 from bokeh.plotting import figure, save, output_file
 from bokeh.models import ColumnDataSource, Whisker
 from gwpy.timeseries import TimeSeries
@@ -7,7 +8,9 @@ import cupy
 from cupyx.profiler import benchmark
 import timeit
 
-from dataset import get_ifo_data, O3
+import tensorflow as tf
+
+from .dataset import get_ifo_data, O3
 
 import scipy
 
@@ -143,10 +146,10 @@ def plot_whiten_functions(
             noverlap=int(sample_rate*overlap), 
             average='median')
 
-    # Time and run cupy-based function
-    timeseries = cupy.asarray(data)
-    whitened_cp = whiten(timeseries, timeseries, sample_rate, fftlength=fftlength, overlap=overlap)
-    whitened_cp = cupy.asnumpy(whitened_cp)
+    # Time and run cupy-based function    
+    timeseries = tf.convert_to_tensor(data)
+    whitened_cp = whiten_ts(timeseries, timeseries, sample_rate, fftlength=fftlength, overlap=overlap)
+    whitened_cp = whitened_cp.asnumpy(whitened_cp)
     
     f, cp_psd = \
         scipy.signal.csd(
@@ -253,7 +256,8 @@ def real_noise_test():
         max_num_examples = 32,
         num_examples_per_batch = 32,
         order = "shortest_first",
-        apply_whitening = False
+        apply_whitening = False,
+        return_keys = ["data"]
     )
     
     background_noise_iterator_w = get_ifo_data(
@@ -265,10 +269,14 @@ def real_noise_test():
         max_num_examples = 32,
         num_examples_per_batch = 32,
         order = "shortest_first",
-        apply_whitening = True
+        apply_whitening = True,
+        return_keys = ["data"]
     )
     
     for i, (noise_chunk, noise_chunk_w) in enumerate(zip(background_noise_iterator, background_noise_iterator_w)):
+        
+        noise_chunk = noise_chunk["data"]
+        noise_chunk_w = noise_chunk_w["data"]
         
         # Convert the TensorFlow tensor to a NumPy array for plotting
         data   = noise_chunk[0].numpy()
@@ -277,12 +285,17 @@ def real_noise_test():
         # Create a GWpy TimeSeries object
         ts = TimeSeries(data, sample_rate=sample_rate_hertz)
         whitened_ts = ts.whiten(fftlength=fftlength, overlap=overlap, fduration = 1.0).value
-
+        
         # Whitening using cupy-based function
-        timeseries = cupy.asarray(noise_chunk.numpy())
+        timeseries = cupy.asarray(data)
         whitened_cp = whiten(timeseries, timeseries, sample_rate_hertz, fftlength=fftlength, overlap=overlap)
-        whitened_cp = cupy.asnumpy(whitened_cp[0])
-
+        whitened_cp = cupy.asnumpy(whitened_cp)
+        
+        # Whitening using cupy-based function
+        timeseries  = tf.convert_to_tensor(data, dtype = tf.float32)
+        whitened_cp = whiten_tf(timeseries, timeseries, sample_rate_hertz, fftlength=fftlength, overlap=overlap)
+        whitened_cp = whitened_cp.numpy()
+        
         # Calculate power spectral densities
         f, data_psd = scipy.signal.csd(data, data, fs=sample_rate_hertz, window='hann', nperseg=int(sample_rate_hertz*fftlength), noverlap=int(sample_rate_hertz*overlap), average='median')
         f, ts_psd = scipy.signal.csd(whitened_ts, whitened_ts, fs=sample_rate_hertz, window='hann', nperseg=int(sample_rate_hertz*fftlength), noverlap=int(sample_rate_hertz*overlap), average='median')
@@ -293,9 +306,9 @@ def real_noise_test():
         results = {"Original": data, "CuPy": whitened_cp, "GWPY": whitened_ts, "Residuals": residuals, "Generator": noise_chunk_w}
         
         t = np.linspace(0, example_duration_seconds, int(sample_rate_hertz*example_duration_seconds))
-        plot_whitening_outputs(t, results, "../py_ml_data/rn_whitening_outputs.html")  
+        plot_whitening_outputs(t, results, "./py_ml_data/rn_whitening_outputs.html")  
     
         psd_results = {"Original": data_psd, "CuPy": cp_psd, "GWPY": ts_psd}
-        plot_whitening_outputs(f, psd_results, "../py_ml_data/rn_psd_outputs.html")  
+        plot_whitening_outputs(f, psd_results, "./py_ml_data/rn_psd_outputs.html")  
 
 real_noise_test()
