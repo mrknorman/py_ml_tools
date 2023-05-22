@@ -4,6 +4,7 @@ import tensorflow as tf
 import numpy as np
 from tensorflow.python.distribute.distribute_lib import Strategy
 from cupy import ndarray as cupy_ndarray
+import cupy
 from tensorflow.python.framework.ops import EagerTensor
 from tensorflow.data import Dataset
 

@@ -266,7 +266,6 @@ def get_ifo_data(
     saturation: float = 1.0,
     example_duration_seconds: float = 1.0,
     background_duration_seconds: float = 16.0,
-    max_num_examples: float = 0.0,
     apply_whitening: bool = False,
     num_examples_per_batch: int = 1,
     scale_factor: float = 1.0e20,
@@ -356,9 +355,7 @@ def get_ifo_data(
         valid_segments = sort_by_duration(valid_segments)
     elif order == "chronological":
         pass
-
-    current_example_index = 0
-
+    
     with open_hdf5_file(segment_filename) as f:
         
         f.require_group("segments")
@@ -401,8 +398,6 @@ def get_ifo_data(
                                 
                 # Injection, projection
                 if apply_whitening:
-                    #cusignal.spectral_analysis.spectral.csd(batched_examples[1], batched_examples[1])
-                    
                     batched_examples = whiten(
                         batched_examples, 
                         batched_backgrounds, 
@@ -418,12 +413,7 @@ def get_ifo_data(
                 end = start + desired_num_samples
                 batched_examples = batched_examples[:, start:end]
                 batched_examples = cupy.ascontiguousarray(batched_examples)
-                
-                current_example_index += num_examples_per_batch;
-                
-                if (max_num_examples > 0) and (current_example_index > max_num_examples):
-                    return
-                
+                                
                 return_dict = {}
                 if 'data' in return_keys:
                     return_dict['data'] = tf.cast(cupy_to_tensor(batched_examples), tf.float16)
@@ -432,7 +422,7 @@ def get_ifo_data(
                 if 'gps_time' in return_keys:
                     return_dict['gps_time'] = tf.convert_to_tensor(batched_gps_times, dtype=tf.int64)
                 
-                yield return_dict
+                yield tf.cast(cupy_to_tensor(batched_examples), tf.float16)
 
 def get_ifo_data_generator(
     time_interval: Union[tuple, ObservingRun], 
