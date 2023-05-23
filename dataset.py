@@ -77,7 +77,7 @@ class IFOData:
         elif (type(self.data) == np.ndarray):
             self.data = tf.convert_to_tensor(self.data, dtype=tf.float32)
         
-        self.duration = tf.shape(self.data)[0] / self.sample_rate
+        self.duration = tf.cast(tf.shape(self.data)[0], tf.float32) / self.sample_rate
         self.dt = 1.0 / self.sample_rate
             
     def downsample(self, new_sample_rate: Union[int, float]):    

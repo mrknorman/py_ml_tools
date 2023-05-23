@@ -423,4 +423,4 @@ def whiten(
     if is_1d:
         out = out[0]
 
-    return out * tf.sqrt(2.0 * dt)
+    return out * tf.sqrt(4.0 * dt)
