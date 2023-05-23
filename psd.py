@@ -1,11 +1,13 @@
 import tensorflow as tf
 import tensorflow_probability  as tfp
 
+@tf.function 
 def fftfreq(n, d=1.0):
     val = 1.0 / (n * d)
     results = tf.range(0, n // 2 + 1, dtype=tf.float32)  # Note the +1 here
     return results * val
 
+@tf.function 
 def psd(signal, nperseg, noverlap=None, fs=1.0, mode="mean"):
     if noverlap is None:
         noverlap = nperseg // 2

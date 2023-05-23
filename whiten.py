@@ -3,6 +3,7 @@ from .psd import psd
 import tensorflow_probability  as tfp
 import tensorflow.signal as tfs
 
+@tf.function 
 def planck(N: int, nleft: int, nright: int) -> tf.Tensor:
     """
     Create a Planck-taper window.
@@ -38,6 +39,7 @@ def planck(N: int, nleft: int, nright: int) -> tf.Tensor:
     
     return window
 
+@tf.function 
 def truncate_transfer(
     transfer: tf.Tensor,
     ncorner: int = None
@@ -67,13 +69,14 @@ def truncate_transfer(
         )
         
     plank = planck(nsamp-ncorner, nleft=5, nright=5)
-        
-    transfer = tf.Variable(transfer)
-    transfer[:,:ncorner].assign(tf.zeros_like(transfer[:,:ncorner]))
-    transfer[:,ncorner:nsamp].assign(tf.multiply(transfer[:,ncorner:nsamp], planck(nsamp-ncorner, nleft=5, nright=5)))
     
-    return transfer
+    transfer_zeros = tf.zeros_like(transfer[:,:ncorner])
+    transfer_mod = tf.multiply(transfer[:,ncorner:nsamp], plank)
+    new_transfer = tf.concat([transfer_zeros, transfer_mod], axis=-1)
+    
+    return new_transfer
 
+@tf.function 
 def truncate_impulse(
     impulse: tf.Tensor, 
     ntaps: int, 
@@ -109,14 +112,17 @@ def truncate_impulse(
     # Extend this section with more cases if more window functions are required.
     else:
         raise ValueError(f"Window function {window} not supported")
+    
+    impulse_start = impulse[:,:trunc_start] * window[trunc_start:ntaps]
+    impulse_stop = impulse[:,trunc_stop:] * window[:trunc_start]
+    impulse_middle = tf.zeros_like(impulse[:,trunc_start:trunc_stop])
+    
+    new_impulse = tf.concat([impulse_start, impulse_middle, impulse_stop], axis=-1)
 
-    impulse = tf.Variable(impulse)
-    impulse[:,:trunc_start].assign(impulse[:,:trunc_start]*window[trunc_start:ntaps])
-    impulse[:,trunc_stop:].assign(impulse[:,trunc_stop:]*window[:trunc_start])
-    impulse[:,trunc_start:trunc_stop].assign(tf.zeros_like(impulse[:,trunc_start:trunc_stop]))
+    return new_impulse
 
-    return impulse
 
+@tf.function 
 def fir_from_transfer(
     transfer: tf.Tensor, 
     ntaps: int, 
@@ -153,6 +159,7 @@ def fir_from_transfer(
     impulse = tf.roll(impulse, shift=int(ntaps/2 - 1), axis=-1)[:,: ntaps]
     return impulse
 
+@tf.function 
 def fftconvolve_(in1, in2, mode="full"):
     """Convolve two N-dimensional arrays using FFT.
 
@@ -202,7 +209,8 @@ def fftconvolve_(in1, in2, mode="full"):
         raise ValueError(
             "acceptable mode flags are 'valid', 'same', or 'full'"
         )
-        
+
+@tf.function 
 def _centered(arr, newsize):
     # Ensure correct dimensionality
     if len(arr.shape) == 1:
@@ -212,6 +220,7 @@ def _centered(arr, newsize):
     end_ind = start_ind + newsize
     return arr[..., start_ind:end_ind]
 
+@tf.function 
 def fftconvolve(in1, in2, mode="full"):
     # Extract shapes
     s1 = tf.shape(in1)[-1]
@@ -236,6 +245,7 @@ def fftconvolve(in1, in2, mode="full"):
 
     return cropped
 
+@tf.function 
 def convolve(
     timeseries: tf.Tensor, 
     fir: tf.Tensor, 
@@ -303,6 +313,7 @@ def convolve(
 
     return conv
 
+@tf.function 
 def interpolate(
     new_x: tf.Tensor, 
     x: tf.Tensor, 
@@ -339,16 +350,10 @@ def interpolate(
     This function uses `tfp.math.interp_regular_1d_grid`, which performs 
     linear interpolation.
     """
+    
+    return tfp.math.interp_regular_1d_grid(new_x, x[0], x[-1], y, axis=-1)
 
-    result = tf.TensorArray(y.dtype, size=y.shape[0])
-
-    for i in range(y.shape[0]):
-        result = result.write(
-            i, tfp.math.interp_regular_1d_grid(new_x, x[0], x[-1], y[i], grid_regularizing_transform=None)
-        )
-
-    return result.stack()
-
+@tf.function 
 def whiten(
     timeseries: tf.Tensor, 
     background: tf.Tensor,
