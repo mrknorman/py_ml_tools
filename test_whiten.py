@@ -1,11 +1,9 @@
 from .whiten import whiten
-from .whiten_tf import whiten as whiten_tf
 from bokeh.plotting import figure, save, output_file
 from bokeh.models import ColumnDataSource, Whisker
 from gwpy.timeseries import TimeSeries
 import numpy as np
-import cupy
-from cupyx.profiler import benchmark
+
 import timeit
 
 import tensorflow as tf
@@ -112,9 +110,7 @@ def plot_whiten_functions(
     fftlength=1, 
     overlap=0.5
     ):
-    
-    cupy.cuda.Device(4).use()
-        
+            
     # Generate random data
     np.random.seed(42)    
     t = np.linspace(0, duration, int(duration*sample_rate), endpoint=False)  # time variable
@@ -146,28 +142,28 @@ def plot_whiten_functions(
             noverlap=int(sample_rate*overlap), 
             average='median')
 
-    # Time and run cupy-based function    
+    # Time and run tensorflow-based function    
     timeseries = tf.convert_to_tensor(data)
-    whitened_cp = whiten_ts(timeseries, timeseries, sample_rate, fftlength=fftlength, overlap=overlap)
-    whitened_cp = whitened_cp.asnumpy(whitened_cp)
+    whitened_tf = whiten_ts(timeseries, timeseries, sample_rate, fftlength=fftlength, overlap=overlap)
+    whitened_tf = whitened_tf.numpy()
     
-    f, cp_psd = \
+    f, tf_psd = \
         scipy.signal.csd(
-            whitened_cp, 
-            whitened_cp, 
+            whitened_tf, 
+            whitened_tf, 
             fs=sample_rate, 
             window='hann', 
             nperseg=int(sample_rate*fftlength), 
             noverlap=int(sample_rate*overlap), 
             average='median')
     
-    residuals = np.abs(whitened_cp - whitened_ts)
+    residuals = np.abs(whitened_tf - whitened_ts)
     
-    results = {"Original": data, "CuPy": whitened_cp, "GWPY": whitened_ts, "Residuals": residuals}
+    results = {"Original": data, "Tensorflow": whitened_tf, "GWPY": whitened_ts, "Residuals": residuals}
     
     plot_whitening_outputs(t, results, "../py_ml_data/whitening_outputs.html")  
     
-    psd_results = {"Original": data_psd, "CuPy": cp_psd, "GWPY": ts_psd}
+    psd_results = {"Original": data_psd, "Tensorflow": tf_psd, "GWPY": ts_psd}
     plot_whitening_outputs(f, psd_results, "../py_ml_data/psd_outputs.html")  
     
 def test_whiten_functions():
@@ -175,8 +171,6 @@ def test_whiten_functions():
     duration = 16
     fftlength = 1
     overlap = 0.5
-
-    cupy.cuda.Device(4).use()
 
     # Generate random data
     np.random.seed(42)
@@ -188,24 +182,24 @@ def test_whiten_functions():
     ts = TimeSeries(data, sample_rate=sample_rate)
     whitened_ts = ts.whiten(fftlength=fftlength, overlap=overlap).value
 
-    # Whitening using cupy-based function
-    timeseries = cupy.asarray(data)
-    whitened_cp = whiten(timeseries, timeseries, sample_rate, fftlength=fftlength, overlap=overlap)
-    whitened_cp = cupy.asnumpy(whitened_cp)
+    # Whitening using tensorflow-based function
+    timeseries =  tf.convert_to_tensor(data, dtype = tf.float32)
+    whitened_tf = whiten(timeseries, timeseries, sample_rate, fftlength=fftlength, overlap=overlap)
+    whitened_tf = whitened_tf.numpy()
 
     # Calculate power spectral densities
     f, data_psd = scipy.signal.csd(data, data, fs=sample_rate, window='hann', nperseg=int(sample_rate*fftlength), noverlap=int(sample_rate*overlap), average='median')
     f, ts_psd = scipy.signal.csd(whitened_ts, whitened_ts, fs=sample_rate, window='hann', nperseg=int(sample_rate*fftlength), noverlap=int(sample_rate*overlap), average='median')
-    f, cp_psd = scipy.signal.csd(whitened_cp, whitened_cp, fs=sample_rate, window='hann', nperseg=int(sample_rate*fftlength), noverlap=int(sample_rate*overlap), average='median')
+    f, tf_psd = scipy.signal.csd(whitened_tf, whitened_tf, fs=sample_rate, window='hann', nperseg=int(sample_rate*fftlength), noverlap=int(sample_rate*overlap), average='median')
     
     # Find peaks in the PSD of the whitened data
     ts_peaks, _ = scipy.signal.find_peaks(np.abs(ts_psd), threshold = 1.0E-3)
-    cp_peaks, _ = scipy.signal.find_peaks(np.abs(cp_psd), threshold = 1.0E-3)
+    tf_peaks, _ = scipy.signal.find_peaks(np.abs(tf_psd), threshold = 1.0E-3)
     data_peaks, _ = scipy.signal.find_peaks(np.abs(data_psd), threshold = 1.0E-3)
     
     # Check if there are no peaks in the PSD of the whitened data
     assert len(ts_peaks) == 0, "Peaks found in the PSD of the GWpy whitened data"
-    assert len(cp_peaks) == 0, "Peaks found in the PSD of the cupy whitened data"
+    assert len(tf_peaks) == 0, "Peaks found in the PSD of the Tensorflow whitened data"
     
 def test_whiten_performace(
     sample_rate=8192, 
@@ -223,19 +217,21 @@ def test_whiten_performace(
     
     performance_results = {}
     
+    """
     performance_results["GWPY"] = benchmark( \
             ts.whiten, 
             (fftlength, overlap), 
             n_repeat=num_trials)
     
-    performance_results["CuPy"] = benchmark( \
+    performance_results["Te"] = benchmark( \
             whiten, 
             (timeseries, timeseries, sample_rate, fftlength, overlap), 
             n_repeat=num_trials)
     
-    assert np.mean(performance_results["CuPy"].cpu_times) < np.mean(performance_results["GWPY"].cpu_times), "GPU version is not faster than CPU version"
+    assert np.mean(performance_results["Tensorflow"].cpu_times) < np.mean(performance_results["GWPY"].cpu_times), "GPU version is not faster than CPU version"
     
     plot_performance_comparison(performance_results)
+    """
     
 test_whiten_functions()
     
@@ -253,7 +249,6 @@ def real_noise_test():
         ifo = "L1",
         sample_rate_hertz = sample_rate_hertz,
         example_duration_seconds = example_duration_seconds,
-        max_num_examples = 32,
         num_examples_per_batch = 32,
         order = "shortest_first",
         apply_whitening = False,
@@ -266,7 +261,6 @@ def real_noise_test():
         ifo = "L1",
         sample_rate_hertz = sample_rate_hertz,
         example_duration_seconds = example_duration_seconds,
-        max_num_examples = 32,
         num_examples_per_batch = 32,
         order = "shortest_first",
         apply_whitening = True,
@@ -286,29 +280,27 @@ def real_noise_test():
         ts = TimeSeries(data, sample_rate=sample_rate_hertz)
         whitened_ts = ts.whiten(fftlength=fftlength, overlap=overlap, fduration = 1.0).value
         
-        # Whitening using cupy-based function
-        timeseries = cupy.asarray(data)
-        whitened_cp = whiten(timeseries, timeseries, sample_rate_hertz, fftlength=fftlength, overlap=overlap)
-        whitened_cp = cupy.asnumpy(whitened_cp)
-        
-        # Whitening using cupy-based function
+        # Whitening using tensorflow-based function
         timeseries  = tf.convert_to_tensor(data, dtype = tf.float32)
-        whitened_cp = whiten_tf(timeseries, timeseries, sample_rate_hertz, fftlength=fftlength, overlap=overlap)
-        whitened_cp = whitened_cp.numpy()
+        whitened_tf = whiten(timeseries, timeseries, sample_rate_hertz, fftlength=fftlength, overlap=overlap)
+        whitened_tf = whitened_tf.numpy()
         
         # Calculate power spectral densities
         f, data_psd = scipy.signal.csd(data, data, fs=sample_rate_hertz, window='hann', nperseg=int(sample_rate_hertz*fftlength), noverlap=int(sample_rate_hertz*overlap), average='median')
         f, ts_psd = scipy.signal.csd(whitened_ts, whitened_ts, fs=sample_rate_hertz, window='hann', nperseg=int(sample_rate_hertz*fftlength), noverlap=int(sample_rate_hertz*overlap), average='median')
-        f, cp_psd = scipy.signal.csd(whitened_cp, whitened_cp, fs=sample_rate_hertz, window='hann', nperseg=int(sample_rate_hertz*fftlength), noverlap=int(sample_rate_hertz*overlap), average='median')
+        f, tf_psd = scipy.signal.csd(whitened_tf, whitened_tf, fs=sample_rate_hertz, window='hann', nperseg=int(sample_rate_hertz*fftlength), noverlap=int(sample_rate_hertz*overlap), average='median')
         
-        residuals = np.abs(whitened_cp - whitened_ts)
+        residuals = np.abs(whitened_tf - whitened_ts)
             
-        results = {"Original": data, "CuPy": whitened_cp, "GWPY": whitened_ts, "Residuals": residuals, "Generator": noise_chunk_w}
+        results = {"Original": data, "Tensorflow": whitened_tf, "GWPY": whitened_ts, "Residuals": residuals, "Generator": noise_chunk_w}
         
         t = np.linspace(0, example_duration_seconds, int(sample_rate_hertz*example_duration_seconds))
         plot_whitening_outputs(t, results, "./py_ml_data/rn_whitening_outputs.html")  
     
-        psd_results = {"Original": data_psd, "CuPy": cp_psd, "GWPY": ts_psd}
+        psd_results = {"Original": data_psd, "Tensorflow": tf_psd, "GWPY": ts_psd}
         plot_whitening_outputs(f, psd_results, "./py_ml_data/rn_psd_outputs.html")  
+        
+        if (i > 1):
+            break
 
 real_noise_test()

@@ -3,8 +3,6 @@ import logging
 import tensorflow as tf
 import numpy as np
 from tensorflow.python.distribute.distribute_lib import Strategy
-from cupy import ndarray as cupy_ndarray
-import cupy
 from tensorflow.python.framework.ops import EagerTensor
 from tensorflow.data import Dataset
 
@@ -63,29 +61,6 @@ def setup_cuda(device_num: str, verbose: bool = False) -> Strategy:
 
     # Return the MirroredStrategy instance.
     return strategy
-
-def cupy_to_tensor(cupy_array: cupy_ndarray) -> EagerTensor:
-    """
-    Converts a CuPy array to a TensorFlow tensor using DLPack.
-
-    Args:
-        cupy_array (cupy.ndarray): The CuPy array to be converted.
-
-    Returns:
-        tf.Tensor: The converted TensorFlow tensor.
-    """
-    try:
-        # Convert the CuPy array to a DLPack. DLPack is an open standard to tensor data structure sharing across different frameworks.
-        dlpack = cupy_array.toDlpack()
-
-        # Convert the DLPack to a TensorFlow tensor.
-        tensor = tf.experimental.dlpack.from_dlpack(dlpack)
-
-    except Exception as e:
-        logging.error(f"Failed to convert CuPy array to TensorFlow tensor: {e}")
-        raise
-
-    return tensor
 
 def load_datasets(paths):
     
