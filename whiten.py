@@ -1,5 +1,5 @@
 import tensorflow as tf
-from .psd import psd
+from .psd import calculate_psd
 import tensorflow_probability  as tfp
 import tensorflow.signal as tfs
 
@@ -357,7 +357,7 @@ def interpolate(
 def whiten(
     timeseries: tf.Tensor, 
     background: tf.Tensor,
-    sample_rate: float, 
+    sample_rate_hertz: float, 
     fftlength: int = 4, 
     overlap: int = 2,
     highpass: float = None,
@@ -374,7 +374,7 @@ def whiten(
         The time series data to whiten.
     background : tf.Tensor
         The time series to use to calculate the asd.
-    sample_rate : float
+    sample_rate_hertz : float
         The sample rate of the time series data.
     fftlength : int, optional
         Length of the FFT window, default is 4.
@@ -400,20 +400,24 @@ def whiten(
         timeseries = tf.expand_dims(timeseries, axis=0)
         background = tf.expand_dims(background, axis=0)
 
-    dt = 1 / sample_rate
+    dt = 1 / sample_rate_hertz
     
-    freqs, psd_ = psd(background, nperseg=int(sample_rate*fftlength), noverlap=int(sample_rate*overlap), fs=sample_rate)
-    asd = tf.sqrt(psd_)
+    freqs, psd = calculate_psd(
+        background, 
+        nperseg=int(sample_rate_hertz*fftlength), 
+        noverlap=int(sample_rate_hertz*overlap), 
+        sample_rate_hertz=sample_rate_hertz
+    )
+    asd = tf.sqrt(psd)
     
-    df = 1.0 / (timeseries.shape[-1] / sample_rate)
+    df = 1.0 / (timeseries.shape[-1] / sample_rate_hertz)
     fsamples = tf.range(0, timeseries.shape[-1]//2+1, dtype=tf.float32) * df
     freqs = tf.cast(freqs, tf.float32)
 
-    if (asd.shape[-1] != timeseries.shape[-1]//2+1):
-        asd = interpolate(fsamples, freqs, asd)
+    asd = interpolate(fsamples, freqs, asd)
 
     ncorner = int(highpass / df) if highpass else 0
-    ntaps = int(fduration * sample_rate)
+    ntaps = int(fduration * sample_rate_hertz)
     transfer = 1.0 / asd
 
     tdw = fir_from_transfer(transfer, ntaps, window=window, ncorner=ncorner)

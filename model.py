@@ -4,17 +4,13 @@ from typing import Union, List, Dict
 import numpy as np
 from copy import deepcopy
 
+@dataclass
 class HyperParameter:
-    def __init__(self, value: Union[int, float, str], possible_values: Dict[str, Union[str, List[Union[int, float]]]]):
-        """
-        Initializes a HyperParameter instance.
-        
-        Args:
-        value: Initial value for this hyperparameter.
-        possible_values: Dictionary specifying the type and possible values for this hyperparameter.
-        """
-        self.value = value
-        self.possible_values = possible_values
+    possible_values: Dict[str, Union[str, List[Union[int, float]]]]
+    value: Union[int, float, str] = None
+    
+    def __post_init__(self):
+        self.randomize()
 
     def randomize(self):
         """
@@ -34,8 +30,6 @@ class HyperParameter:
             self.value = np.random.randint(low, high + 1)
         elif value_type == 'float_range':
             self.value = np.random.uniform(*possible_values)
-        elif self.possible_values == 'this':
-            self.value == self.possible_values
 
     def mutate(self, mutation_rate: float):
         """
@@ -116,8 +110,8 @@ class DenseLayer(BaseLayer):
 class ConvLayer(BaseLayer):
     filters: HyperParameter
     kernel_size: HyperParameter
-    strides: HyperParameter = HyperParameter(1, {'type': 'int', 'values': [1]})
-    padding: HyperParameter = HyperParameter('valid', {'type': 'str', 'values': ['valid', 'same']})
+    strides: HyperParameter = HyperParameter({'type': 'list', 'values': [1]})
+    padding: HyperParameter = HyperParameter({'type': 'list', 'values': ['same']})
     
     def __init__(self, filters: HyperParameter, kernel_size: HyperParameter, activation: HyperParameter, strides: HyperParameter):
         """
@@ -134,7 +128,7 @@ class ConvLayer(BaseLayer):
         self.filters = filters
         self.kernel_size = kernel_size
         self.strides = strides
-        self.padding = HyperParameter("same", {"type" : "this", "values" : "same"})
+        self.padding = HyperParameter({"type" : "list", "values" : ["same"]})
         self.mutable_attributes = [self.activation, self.filters, self.kernel_size, self.strides]
 
 
@@ -227,6 +221,9 @@ class ModelBuilder:
         )
         
         print(self.metrics)
+        
+    def validate_model(self, validation_dataset: tf.data.Dataset):
+        
 
     def test_model(self, validation_datasets: tf.data.Dataset, batch_size: int):
         """

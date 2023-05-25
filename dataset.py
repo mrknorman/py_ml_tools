@@ -15,7 +15,9 @@ from pathlib import Path
 from dataclasses import dataclass
 from datetime import datetime
 
-from .whiten import whiten
+from .cuphenom.py.cuphenom import generate_phenom, randomise_arguments
+from .whiten   import whiten
+from .snr      import scale_to_snr
 
 import h5py
 
@@ -250,6 +252,7 @@ def get_ifo_data(
     channel: str = None,
     frame_type: str = None,
     state_flag: str = None,
+    injection_configs: list = [], 
     saturation: float = 1.0,
     example_duration_seconds: float = 1.0,
     background_duration_seconds: float = 16.0,
@@ -382,8 +385,20 @@ def get_ifo_data(
             for _ in range(current_max_batch_count):
                 num_subsection_elements = int((example_duration_seconds + fduration) * sample_rate_hertz)
                 num_background_elements = int(background_duration_seconds * sample_rate_hertz)
-                batched_examples, batched_backgrounds, batched_gps_times = current_segment_data.random_subsection(num_subsection_elements, num_background_elements, num_examples_per_batch)
-                                
+                batched_examples, batched_backgrounds, batched_gps_times = \
+                    current_segment_data.random_subsection(
+                        num_subsection_elements, 
+                        num_background_elements, 
+                        num_examples_per_batch
+                    )
+                
+                for config in injection_configs: 
+                    if config["type"] == "cbc":
+                        injection = randomise_arguments(
+                            config["args"], 
+                            generate_phenom
+                        )                 
+                
                 # Injection, projection
                 if apply_whitening:
                     batched_examples = whiten(

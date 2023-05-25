@@ -46,6 +46,7 @@ if __name__ == "__main__":
     skywarp_data_directory = "./skywarp_data/"
     batch_size = 32
     max_populaton = 10
+    max_num_inital_layers = 10
     
     with strategy.scope():
         
@@ -77,47 +78,28 @@ if __name__ == "__main__":
             .prefetch(tf.data.experimental.AUTOTUNE) \
             .with_options(options)
         
-        optimizer = \
-            HyperParameter(
-                "adam", 
-                {"type" : "this", "values" : ['adam']}
+        optimizer = HyperParameter(
+                {"type" : "list", "values" : ['adam']}
             )
-        
-        max_num_inital_layers = 10
-        num_layers = \
-            HyperParameter(
-                10, 
+        num_layers = HyperParameter(
                 {"type" : "int_range", "values" : [1, max_num_inital_layers]}
             )
-        batch_size = \
-            HyperParameter(
-                batch_size, 
-                {"type" : "this", "values" : [batch_size]}
+        batch_size = HyperParameter(
+                {"type" : "list", "values" : [batch_size]}
             )
-        
-        activations = \
-            HyperParameter(
-                "relu", 
+        activations = HyperParameter(
                 {"type" : "list", "values" : ['relu', 'elu', 'sigmoid', 'tanh']}
             )
-        d_units = \
-            HyperParameter(
-                8, 
+        d_units = HyperParameter(
                 {"type" : "power_2_range", "values" : [16, 256]}
             )
-        filters = \
-            HyperParameter(
-                8, 
+        filters = HyperParameter(
                 {"type" : "power_2_range", "values" : [16, 256]}
             )
-        kernel_size = \
-            HyperParameter(
-                8, 
+        kernel_size = HyperParameter(
                 {"type" : "int_range", "values" : [1, 7]}
             )
-        strides = \
-            HyperParameter(
-                8, 
+        strides = HyperParameter(
                 {"type" : "int_range", "values" : [1, 7]}
             )
         
@@ -125,7 +107,6 @@ if __name__ == "__main__":
             "Dense" : DenseLayer(d_units,  activations),
             "Convolutional":  ConvLayer(filters, kernel_size, activations, strides)
         }
-        
         
         genome_template = {
             'base' : {

@@ -8,7 +8,14 @@ def fftfreq(n, d=1.0):
     return results * val
 
 @tf.function 
-def psd(signal, nperseg, noverlap=None, fs=1.0, mode="mean"):
+def calculate_psd(
+        signal, 
+        nperseg, 
+        noverlap=None, 
+        sample_rate_hertz = 1.0, 
+        mode="mean"
+    ):
+    
     if noverlap is None:
         noverlap = nperseg // 2
     
@@ -34,6 +41,6 @@ def psd(signal, nperseg, noverlap=None, fs=1.0, mode="mean"):
         raise "Mode not supported"
     
     # Step 5: Compute the frequencies corresponding to the power spectrum values
-    freqs = fftfreq(nperseg, d=1.0/fs)
+    freqs = fftfreq(nperseg, d=1.0/sample_rate_hertz)
     
-    return freqs, (2.0*pxx / fs)
+    return freqs, (2.0*pxx / sample_rate_hertz)

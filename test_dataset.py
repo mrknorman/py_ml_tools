@@ -1,6 +1,8 @@
 from .dataset import get_ifo_data_generator, get_ifo_data, O3
 from .setup import setup_cuda
 from bokeh.plotting import figure, output_file, show
+from itertools import islice
+import numpy as np
 
 import tensorflow as tf
 
@@ -86,11 +88,67 @@ def test_noise():
             
             if (i > 32*100):
                 break
-        
+                
+def test_injection(): 
+    
+    sample_rate_hertz = 8196
+    duration_seconds = 2.0
+    
+    injection_configs = [
+        {
+            "type" : "cbc",
+            "args" : {
+                "approximant_enum" : \
+                    {"value" : 1, "distribution_type": "constant", "dtype" : int}, 
+                "mass_1_msun" : \
+                    {"min_value" : 5, "max_value": 95, "distribution_type": "uniform"},
+                "mass_2_msun" : \
+                    {"min_value" : 5, "max_value": 95, "distribution_type": "uniform"},
+                "sample_rate_hertz" : \
+                    {"value" : sample_rate_hertz, "distribution_type": "constant"},
+                "duration_seconds" : \
+                    {"value" : duration_seconds, "distribution_type": "constant"},
+                "inclination_radians" : \
+                    {"min_value" : 0, "max_value": np.pi, "distribution_type": "uniform"},
+                "distance_mpc" : \
+                    {"min_value" : 10, "max_value": 1000, "distribution_type": "uniform"},
+                "reference_orbital_phase_in" : \
+                    {"min_value" : 0, "max_value": 2*np.pi, "distribution_type": "uniform"},
+                "ascending_node_longitude" : \
+                    {"min_value" : 0, "max_value": 2*np.pi, "distribution_type": "uniform"},
+                "eccentricity" : \
+                    {"min_value" : 0, "max_value": 0.1, "distribution_type": "uniform"},
+                "mean_periastron_anomaly" : \
+                    {"min_value" : 0, "max_value": 2*np.pi, "distribution_type": "uniform"},
+                "spin_1_in" : \
+                    {"min_value" : -0.5, "max_value": 0.5, "distribution_type": "uniform", "num_values" : 3},
+                "spin_2_in" : \
+                    {"min_value" : -0.5, "max_value": 0.5, "distribution_type": "uniform", "num_values" : 3}
+            }
+        }
+    ]
+    
+    ifo_data_generator = get_ifo_data(
+        time_interval = O3,
+        data_labels = ["noise", "glitches"],
+        ifo = "L1",
+        injection_configs = injection_configs,
+        sample_rate_hertz = sample_rate_hertz,
+        example_duration_seconds = duration_seconds,
+        max_segment_size = 3600,
+        num_examples_per_batch = 32,
+        order = "random",
+        apply_whitening = True,
+        return_keys = ["data"]
+    )
+    
+    for data in islice(ifo_data_generator, 10):
+        pass
         
 if __name__ == "__main__":
     setup_cuda("0", verbose = True)    
-    test_noise()
+    test_injection()
+    #test_noise()
 
     
    

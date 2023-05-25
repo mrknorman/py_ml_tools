@@ -303,4 +303,5 @@ def real_noise_test():
         if (i > 1):
             break
 
-real_noise_test()
+if __name__ == "__main__":
+    real_noise_test()

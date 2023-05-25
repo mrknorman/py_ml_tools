@@ -1,6 +1,5 @@
-import numpy as np
 from scipy.signal import welch
-from .psd import psd
+from .psd import calculate_psd
 import tensorflow as tf
 from bokeh.plotting import figure, save, output_file
 
@@ -17,7 +16,7 @@ def test_welch_method():
 
     # Step 3: Compute the power spectral density using TensorFlow
     x_tf = tf.constant(x, dtype=tf.float32)
-    f_tf, Pxx_tf = psd(x_tf, nperseg=1024, fs=fs)
+    f_tf, Pxx_tf = calculate_psd(x_tf, nperseg=1024, fs=fs)
     f_tf, Pxx_tf = f_tf.numpy(), Pxx_tf.numpy()
 
     # Step 4: Plot the results using bokeh
@@ -32,4 +31,5 @@ def test_welch_method():
     output_file("./py_ml_data/psd_test.html")
     save(p)
 
-test_welch_method()
+if __name__ == "__main__":
+    test_welch_method()
