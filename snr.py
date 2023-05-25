@@ -38,6 +38,13 @@ def calculate_snr(
         The computed signal-to-noise ratio.
     """
         
+    # Check if input is 1D or 2D
+    is_1d = len(injection.shape) == 1
+    if is_1d:
+        # If 1D, add an extra dimension
+        injection = tf.expand_dims(injection, axis=0)
+        background = tf.expand_dims(background, axis=0)
+        
     window_num_samples  = int(sample_rate_hertz*window_duration_seconds)
     overlap_num_samples = int(sample_rate_hertz*overlap_duration_seconds)
     fft_num_samples     = int(sample_rate_hertz*fft_duration_seconds)
@@ -49,7 +56,7 @@ def calculate_snr(
     inj_fft = tf.signal.rfft(injection) / sample_rate_hertz
 
     # Get rid of DC
-    inj_fft_no_dc = inj_fft[1:int(window_num_samples / 2.0) + 1]
+    inj_fft_no_dc = inj_fft[:,1:int(window_num_samples / 2.0) + 1]
 
     # Compute the square of absolute value
     inj_fft_squared = tf.abs(inj_fft_no_dc*tf.math.conj(inj_fft_no_dc))
@@ -80,15 +87,21 @@ def calculate_snr(
         )
     
     # Compute the SNR numerator in the frequency window
-    snr_numerator = inj_fft_squared[start_freq_num_samples:end_freq_num_samples]
+    snr_numerator = inj_fft_squared[:,start_freq_num_samples:end_freq_num_samples]
     
     # Use the interpolated ASD in the frequency window for SNR calculation
-    snr_denominator = psd_interp[start_freq_num_samples:end_freq_num_samples]
+    snr_denominator = psd_interp[:,start_freq_num_samples:end_freq_num_samples]
     
     # Calculate the SNR
     SNR = tf.math.sqrt(
         (4.0 / window_duration_seconds) * tf.reduce_sum(snr_numerator / snr_denominator, axis = -1)
     )
+    
+    SNR = tf.where(tf.math.is_inf(SNR), 0.0, SNR)
+    
+    # If input was 1D, return 1D
+    if is_1d:
+        SNR = SNR[0]
 
     return SNR
 
@@ -114,8 +127,11 @@ def scale_to_snr(
     )
     
     scale_factor = desired_snr/current_snr
+    scale_factor = tf.where(tf.math.is_inf(scale_factor), 0.0, scale_factor)
     
-    print("Scale factor", scale_factor)
+    if len(scale_factor.shape) == 1: 
+        scale_factor = tf.reshape(scale_factor, (-1, 1))
+    
     return injection*scale_factor
     
     

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Tuple, Union
+from typing import List, Tuple, Union, Dict, Any
 from datetime import datetime
 
 import numpy as np
@@ -242,6 +242,88 @@ def ensure_directory_exists(
     directory = Path(directory)  # Convert to Path if not already
     if not directory.exists():
         directory.mkdir(parents=True, exist_ok=True)
+        
+def roll_vector_zero_padding(vector, max_roll):
+    roll_amount = tf.random.uniform(shape=(), minval=0, maxval=max_roll, dtype=tf.int32)
+
+    # Create a zero vector of the same size as the input
+    zeros = tf.zeros_like(vector)
+
+    # Create the rolled vector by concatenating the sliced vector and zeros
+    rolled_vector = tf.concat([vector[roll_amount:], zeros[:roll_amount]], axis=0)
+
+    return rolled_vector
+
+def add_injections(injection_configs: List[Dict[str, Any]], 
+                       sample_rate_hertz: float, 
+                       duration_seconds: float, 
+                       fduration: float,
+                       num_batches: int, 
+                       batched_examples: tf.Tensor, 
+                       batched_backgrounds: tf.Tensor
+                      ) -> Tuple[tf.Tensor, List[tf.Tensor]]:
+    """
+    This function processes a list of injection configurations. Each configuration is modified in place, 
+    and injections are generated based on the injection chance in the configuration. These injections are 
+    scaled to a certain SNR and added to the batched examples.
+
+    Args:
+        injection_configs: A list of dictionaries, each representing a different injection configuration.
+        sample_rate_hertz: The sample rate in Hz to be set in the configurations.
+        duration_seconds: The base duration in seconds for the configurations.
+        fduration: The additional duration in seconds to add to the base duration.
+        num_batches: The number of batches for which to generate injections.
+        batched_examples: A Tensor containing the batched examples to which the injections will be added.
+        batched_backgrounds: A Tensor containing the batched backgrounds, used in the scaling to SNR process.
+        generate_phenom: A callable used to generate the phenomenon.
+
+    Returns:
+        The modified batched_examples and a list of all the batched_injections created.
+    """
+
+    injections = []
+    
+    # Set common parameters before entering the loop
+    common_args = {
+        "sample_rate_hertz": {"value": sample_rate_hertz, "distribution_type": "constant"},
+        "duration_seconds": {"value": duration_seconds + fduration, "distribution_type": "constant"}
+    }
+
+    for config in injection_configs:
+        if config["type"] == "cbc":
+            config["args"].update(common_args)
+
+            batched_injections = []
+            for _ in range(num_batches):
+                if np.random.random() < config["injection_chance"]:
+                    injection = randomise_arguments(config["args"], generate_phenom)
+                    injection *= 10.0E20 #must exist for precision reasons.
+                    injection = tf.convert_to_tensor(injection[:, 1], dtype=tf.float32)
+                    injection = roll_vector_zero_padding(injection, int(0.9*injection.shape[-1]))
+                else:
+                    injection = tf.zeros(batched_examples.shape[-1])
+                
+                batched_injections.append(injection)
+
+            batched_injections = tf.stack(batched_injections)
+                        
+            scaled_injection = \
+                scale_to_snr(
+                    batched_injections, 
+                    batched_backgrounds, 
+                    config["snr"],
+                    window_duration_seconds=1.0,
+                    sample_rate_hertz=sample_rate_hertz,
+                    fft_duration_seconds=1.0,
+                    overlap_duration_seconds=0.5
+                )
+            
+            batched_examples += batched_injections
+            injections.append(batched_injections)
+            
+    injections = tf.stack(injections)
+
+    return batched_examples, injections
 
 def get_ifo_data(
     time_interval: Union[tuple, ObservingRun], 
@@ -383,8 +465,15 @@ def get_ifo_data(
             current_segment_data = current_segment_data.scale(scale_factor)          
             
             for _ in range(current_max_batch_count):
-                num_subsection_elements = int((example_duration_seconds + fduration) * sample_rate_hertz)
-                num_background_elements = int(background_duration_seconds * sample_rate_hertz)
+                
+                num_subsection_elements = \
+                    int(
+                        (example_duration_seconds + fduration)
+                        *sample_rate_hertz
+                    )
+                num_background_elements = \
+                    int(background_duration_seconds * sample_rate_hertz)
+                
                 batched_examples, batched_backgrounds, batched_gps_times = \
                     current_segment_data.random_subsection(
                         num_subsection_elements, 
@@ -392,22 +481,30 @@ def get_ifo_data(
                         num_examples_per_batch
                     )
                 
-                for config in injection_configs: 
-                    if config["type"] == "cbc":
-                        injection = randomise_arguments(
-                            config["args"], 
-                            generate_phenom
-                        )                 
-                
-                # Injection, projection
+                #Add injection: 
+                if injection_configs:
+                    batched_examples, injections = \
+                        add_injections(
+                            injection_configs, 
+                            sample_rate_hertz, 
+                            example_duration_seconds, 
+                            fduration,
+                            num_examples_per_batch, 
+                            batched_examples, 
+                            batched_backgrounds
+                        )
+                                
+                # Whiten data: 
                 if apply_whitening:
-                    batched_examples = whiten(
-                        batched_examples, 
-                        batched_backgrounds, 
-                        sample_rate_hertz, 
-                        fftlength = 1.0,
-                        overlap = 0.5,
-                        fduration = fduration)
+                    batched_examples = \
+                        whiten(
+                            batched_examples, 
+                            batched_backgrounds, 
+                            sample_rate_hertz, 
+                            fftlength = 1.0,
+                            overlap = 0.5,
+                            fduration = fduration
+                        )
                     
                 # Crop to remove edge effects, crop with or without whitening to
                 # ensure same data is retrieve in both cases
@@ -423,6 +520,8 @@ def get_ifo_data(
                     return_dict['background'] = tf.cast(batched_backgrounds, tf.float16)
                 if 'gps_time' in return_keys:
                     return_dict['gps_time'] = tf.convert_to_tensor(batched_gps_times, dtype=tf.int64)
+                if 'injections' in return_keys:
+                    return_dict['injections'] = injections
                 
                 yield return_dict
 
@@ -436,9 +535,14 @@ def get_ifo_data_generator(
     ):
     
     output_signature = {
-        'data'      : tf.TensorSpec(shape=(kwargs.get('num_examples_per_batch', 1), int(kwargs.get('example_duration_seconds', 1.0)*sample_rate_hertz)), dtype=tf.float16),
-        'background': tf.TensorSpec(shape=(kwargs.get('num_examples_per_batch', 1), int(kwargs.get('background_duration_seconds', 16.0)*sample_rate_hertz)), dtype=tf.float16),
-        'gps_time'  : tf.TensorSpec(shape=(kwargs.get('num_examples_per_batch', 1)), dtype=tf.int64),
+        'data'       : tf.TensorSpec(shape=(kwargs.get('num_examples_per_batch', 1), int(kwargs.get('example_duration_seconds', 1.0)*sample_rate_hertz)), dtype=tf.float16),
+        'background' : tf.TensorSpec(shape=(kwargs.get('num_examples_per_batch', 1), int(kwargs.get('background_duration_seconds', 16.0)*sample_rate_hertz)), dtype=tf.float16),
+        'gps_time'   : tf.TensorSpec(shape=(kwargs.get('num_examples_per_batch', 1)), dtype=tf.int64),
+        'injections' : tf.TensorSpec(shape=(
+                len(kwargs.get('injection_configs', {}).keys()), 
+                kwargs.get('num_examples_per_batch', 1), 
+                int((kwargs.get('example_duration_seconds', 1.0) + kwargs.get('fduration', 1.0))*sample_rate_hertz)
+            ), dtype=tf.float16),
     }
     
     output_signature = {k: output_signature[k] for k in return_keys}

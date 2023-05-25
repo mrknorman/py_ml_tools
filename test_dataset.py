@@ -97,6 +97,8 @@ def test_injection():
     injection_configs = [
         {
             "type" : "cbc",
+            "snr"  : 30,
+            "injection_chance" : 0.5,
             "args" : {
                 "approximant_enum" : \
                     {"value" : 1, "distribution_type": "constant", "dtype" : int}, 
@@ -139,7 +141,8 @@ def test_injection():
         num_examples_per_batch = 32,
         order = "random",
         apply_whitening = True,
-        return_keys = ["data"]
+        return_keys = ["data"],
+        save_segment_data = True,
     )
     
     for data in islice(ifo_data_generator, 10):
