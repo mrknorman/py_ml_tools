@@ -87,14 +87,16 @@ def calculate_snr(
         )
     
     # Compute the SNR numerator in the frequency window
-    snr_numerator = inj_fft_squared[:,start_freq_num_samples:end_freq_num_samples]
+    snr_numerator = \
+        inj_fft_squared[:,start_freq_num_samples:end_freq_num_samples]
     
     # Use the interpolated ASD in the frequency window for SNR calculation
     snr_denominator = psd_interp[:,start_freq_num_samples:end_freq_num_samples]
     
     # Calculate the SNR
     SNR = tf.math.sqrt(
-        (4.0 / window_duration_seconds) * tf.reduce_sum(snr_numerator / snr_denominator, axis = -1)
+        (4.0 / window_duration_seconds) 
+        * tf.reduce_sum(snr_numerator / snr_denominator, axis = -1)
     )
     
     SNR = tf.where(tf.math.is_inf(SNR), 0.0, SNR)

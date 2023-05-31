@@ -275,9 +275,9 @@ def ensure_directory_exists(
     if not directory.exists():
         directory.mkdir(parents=True, exist_ok=True)
         
-def roll_vector_zero_padding(vector, max_roll):
+def roll_vector_zero_padding(vector, min_roll, max_roll):
     roll_amount = tf.random.uniform(
-        shape=(), minval=0, maxval=max_roll, dtype=tf.int32
+        shape=(), minval = min_roll, maxval=max_roll, dtype=tf.int32
     )
 
     # Create a zero vector of the same size as the input
@@ -676,6 +676,56 @@ def generate_filenames(
 
     return segment_filename, injection_file_names
 
+def crop_samples(
+    batched_examples: tf.Tensor, 
+    example_duration_seconds: float, 
+    sample_rate_hertz: float
+    ) -> tf.Tensor:
+    
+    """
+    Crop to remove edge effects and ensure same data is retrieved in all cases.
+    
+    This function calculates the desired number of samples based on the duration 
+    of examples in seconds and the sample rate, then it finds the start and end 
+    index for cropping. It then crops the batched_examples using these indices.
+    
+    Parameters
+    ----------
+     batched_examples : tf.Tensor
+         The batch of examples to be cropped.
+    example_duration_seconds : float
+        The duration of an example in seconds.
+        sample_rate_hertz : float
+        The sample rate in hertz.
+    Returns
+    -------
+    tf.Tensor
+        The cropped batched_examples.
+    """
+    
+    # Check if input is 1D or 2D
+    is_1d = len(batched_examples.shape) == 1
+    if is_1d:
+        # If 1D, add an extra dimension
+        batched_examples = tf.expand_dims(batched_examples, axis=0)
+    
+    # Calculate the desired number of samples based on example duration and sample rate
+    desired_num_samples = int(example_duration_seconds * sample_rate_hertz)
+    
+    # Calculate the start and end index for cropping
+    start = (batched_examples.shape[-1] - desired_num_samples) // 2
+    end = start + desired_num_samples
+    
+    # Crop the batched_examples
+    batched_examples = batched_examples[:, start:end]
+    
+    # If input was 1D, return 1D
+    if is_1d:
+        batched_examples = batched_examples[0]
+    
+    return batched_examples
+
+
 def get_ifo_data(
     time_interval: Union[tuple, ObservingRun], 
     data_labels: List[str], 
@@ -785,6 +835,8 @@ def get_ifo_data(
                     #Would be nice to do this on the gpu:
                     current_segment_data = \
                         current_segment_data.resample(sample_rate_hertz)
+                    
+                    
                 except Exception as e:
                     print(f"Unexpected error: {type(e).__name__}, {str(e)}")
                     continue
@@ -803,6 +855,7 @@ def get_ifo_data(
                         data = current_segment_data.numpy()
                     )
             print("Complete!")
+            
             
             current_segment_data = current_segment_data.scale(scale_factor)   
             
@@ -856,12 +909,11 @@ def get_ifo_data(
                     
                 # Crop to remove edge effects, crop with or without whitening to
                 # ensure same data is retrieve in both cases
-                desired_num_samples = int(
-                    example_duration_seconds * sample_rate_hertz
+                batched_examples = crop_samples(
+                    batched_examples, 
+                    example_duration_seconds, 
+                    sample_rate_hertz
                 )
-                start = (batched_examples.shape[-1] - desired_num_samples) // 2
-                end = start + desired_num_samples
-                batched_examples = batched_examples[:, start:end]
                                 
                 return_dict = {}
                 if 'data' in return_keys:

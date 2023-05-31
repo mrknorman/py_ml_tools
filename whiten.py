@@ -284,7 +284,11 @@ def convolve(
     timeseries_new_back = timeseries[:, -pad:] * window[-pad:]
     timeseries_new_middle = timeseries[:, pad:-pad]
 
-    timeseries_new = tf.concat([timeseries_new_front, timeseries_new_middle, timeseries_new_back], axis=1)
+    timeseries_new = tf.concat([
+        timeseries_new_front, 
+        timeseries_new_middle, 
+        timeseries_new_back
+    ], axis=1)
 
     conv = tf.zeros_like(timeseries_new)
     if nfft >= timeseries_new.shape[-1]/2:
@@ -314,46 +318,6 @@ def convolve(
     return conv
 
 @tf.function 
-def interpolate(
-    new_x: tf.Tensor, 
-    x: tf.Tensor, 
-    y: tf.Tensor
-    ) -> tf.Tensor:
-    """
-    Interpolate a 2D array along each row.
-
-    This function uses linear interpolation to find new y-values for the given
-    `new_x` values, based on the existing (`x`, `y`) pairs. The interpolation
-    is performed independently for each sub-array of `y`.
-
-    Parameters
-    ----------
-    new_x : tf.Tensor
-        The x-values at which to interpolate the y-values. This should be a
-        1D array.
-    x : tf.Tensor
-        The existing x-values. This should be a 1D array of the same length
-        as `new_x`.
-    y : tf.Tensor
-        The existing y-values. This should be a 2D array, where each row is
-        a separate set of y-values corresponding to the `x` values.
-
-    Returns
-    -------
-    result : tf.Tensor
-        A 2D array of the same shape as `y`, containing the interpolated
-        y-values at the `new_x` positions. The interpolation is performed
-        separately for each row of `y`.
-
-    Notes
-    -----
-    This function uses `tfp.math.interp_regular_1d_grid`, which performs 
-    linear interpolation.
-    """
-    
-    return tfp.math.interp_regular_1d_grid(new_x, x[0], x[-1], y, axis=-1)
-
-@tf.function 
 def whiten(
     timeseries: tf.Tensor, 
     background: tf.Tensor,
@@ -362,7 +326,7 @@ def whiten(
     overlap: int = 2,
     highpass: float = None,
     detrend: str ='constant',
-    fduration: int = 1.0,
+    fduration: int = 2.0,
     window: str = "hann"
     ) -> tf.Tensor:
     """
@@ -413,8 +377,15 @@ def whiten(
     df = 1.0 / (timeseries.shape[-1] / sample_rate_hertz)
     fsamples = tf.range(0, timeseries.shape[-1]//2+1, dtype=tf.float32) * df
     freqs = tf.cast(freqs, tf.float32)
-
-    asd = interpolate(fsamples, freqs, asd)
+    
+    asd = \
+        tfp.math.interp_regular_1d_grid(
+            fsamples, 
+            freqs[0], 
+            freqs[-1], 
+            asd, 
+            axis=-1
+        )
 
     ncorner = int(highpass / df) if highpass else 0
     ntaps = int(fduration * sample_rate_hertz)
@@ -427,4 +398,4 @@ def whiten(
     if is_1d:
         out = out[0]
 
-    return out * tf.sqrt(4.0 * dt)
+    return out * tf.sqrt(2.0 * dt)

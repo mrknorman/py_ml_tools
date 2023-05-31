@@ -3,6 +3,7 @@ from bokeh.plotting import figure, save, output_file
 from bokeh.models import ColumnDataSource, Whisker
 from gwpy.timeseries import TimeSeries
 import numpy as np
+from itertools import islice
 
 import timeit
 
@@ -68,7 +69,8 @@ def plot_performance_comparison(cases_dict):
 def plot_whitening_outputs(
     time: np.ndarray, 
     results: dict,
-    filename: str
+    filename: str,
+    dodge = 7
     ) -> None:
     """
     Plot and save the comparison of whitening outputs.
@@ -96,7 +98,6 @@ def plot_whitening_outputs(
     
     colors = ("orange", "blue", "red", "purple", "green", "indigo", "violet")
     
-    dodge = 7
     for i, (color, key) in enumerate(zip(colors, results.keys())):
         p.line(time, results[key] + dodge*i, legend_label=key, line_color=color)
 
@@ -110,12 +111,20 @@ def plot_whiten_functions(
     fftlength=1, 
     overlap=0.5
     ):
-            
+    
+    t = np.linspace(0, duration, int(duration*sample_rate), endpoint=False)  # time variable
     # Generate random data
     np.random.seed(42)    
-    t = np.linspace(0, duration, int(duration*sample_rate), endpoint=False)  # time variable
-    data = 0.5*np.sin(2*np.pi*1.5*t)+0.1*np.sin(2*np.pi*8.5*t)+0.1*np.random.normal(size=t.shape)
+    data = np.random.normal(size=t.shape)
+    #data = 0.5*np.sin(2*np.pi*1.5*t)+0.1*np.sin(2*np.pi*8.5*t)+0.1*np.random.normal(size=t.shape)
     data = data.astype(np.float32)
+    
+    ts = TimeSeries(data, sample_rate=sample_rate)
+    sample_rate = 4096
+    t = np.linspace(0, duration, int(duration*sample_rate), endpoint=False)  # time variable
+
+    ts = ts.resample(sample_rate)
+    data = ts.value.astype(np.float32)
     
     f, data_psd = \
         scipy.signal.csd(
@@ -128,7 +137,6 @@ def plot_whiten_functions(
             average='median')
     
     # Create a GWpy TimeSeries object
-    ts = TimeSeries(data, sample_rate=sample_rate)
     
     whitened_ts = ts.whiten(fftlength=fftlength, overlap=overlap).value
     
@@ -144,7 +152,7 @@ def plot_whiten_functions(
 
     # Time and run tensorflow-based function    
     timeseries = tf.convert_to_tensor(data)
-    whitened_tf = whiten_ts(timeseries, timeseries, sample_rate, fftlength=fftlength, overlap=overlap)
+    whitened_tf = whiten(timeseries, timeseries, sample_rate, fftlength=fftlength, overlap=overlap)
     whitened_tf = whitened_tf.numpy()
     
     f, tf_psd = \
@@ -161,10 +169,10 @@ def plot_whiten_functions(
     
     results = {"Original": data, "Tensorflow": whitened_tf, "GWPY": whitened_ts, "Residuals": residuals}
     
-    plot_whitening_outputs(t, results, "../py_ml_data/whitening_outputs.html")  
+    plot_whitening_outputs(t, results, "./py_ml_data/whitening_outputs.html")  
     
     psd_results = {"Original": data_psd, "Tensorflow": tf_psd, "GWPY": ts_psd}
-    plot_whitening_outputs(f, psd_results, "../py_ml_data/psd_outputs.html")  
+    plot_whitening_outputs(f, psd_results, "./py_ml_data/psd_outputs.html", dodge = 0.1)  
     
 def test_whiten_functions():
     sample_rate = 8192
@@ -184,7 +192,7 @@ def test_whiten_functions():
 
     # Whitening using tensorflow-based function
     timeseries =  tf.convert_to_tensor(data, dtype = tf.float32)
-    whitened_tf = whiten(timeseries, timeseries, sample_rate, fftlength=fftlength, overlap=overlap)
+    whitened_tf = whiten(timeseries, timeseries, sample_rate, fftlength=fftlength, overlap=overlap)    
     whitened_tf = whitened_tf.numpy()
 
     # Calculate power spectral densities
@@ -201,6 +209,8 @@ def test_whiten_functions():
     assert len(ts_peaks) == 0, "Peaks found in the PSD of the GWpy whitened data"
     assert len(tf_peaks) == 0, "Peaks found in the PSD of the Tensorflow whitened data"
     
+    
+    
 def test_whiten_performace(
     sample_rate=8192, 
     duration=16, 
@@ -214,29 +224,16 @@ def test_whiten_performace(
     t = np.linspace(0, duration, int(duration*sample_rate), endpoint=False)  # time variable
     data = 0.5*np.sin(2*np.pi*1.5*t)+0.1*np.sin(2*np.pi*8.5*t)+0.1*np.random.normal(size=t.shape)
     data = data.astype(np.float32)
-    
-    performance_results = {}
-    
+        
     """
-    performance_results["GWPY"] = benchmark( \
-            ts.whiten, 
-            (fftlength, overlap), 
-            n_repeat=num_trials)
-    
-    performance_results["Te"] = benchmark( \
-            whiten, 
-            (timeseries, timeseries, sample_rate, fftlength, overlap), 
-            n_repeat=num_trials)
     
     assert np.mean(performance_results["Tensorflow"].cpu_times) < np.mean(performance_results["GWPY"].cpu_times), "GPU version is not faster than CPU version"
     
     plot_performance_comparison(performance_results)
     """
-    
-test_whiten_functions()
-    
+        
 def real_noise_test():
-    sample_rate_hertz=1024
+    sample_rate_hertz=4096.0
     fftlength=1 
     overlap=0.5
     num_trials=10
@@ -267,7 +264,15 @@ def real_noise_test():
         return_keys = ["data"]
     )
     
-    for i, (noise_chunk, noise_chunk_w) in enumerate(zip(background_noise_iterator, background_noise_iterator_w)):
+    for i, (noise_chunk, noise_chunk_w) in islice(
+            enumerate(
+                zip(
+                    background_noise_iterator, 
+                    background_noise_iterator_w
+                )
+            ), 
+            1
+        ):
         
         noise_chunk = noise_chunk["data"]
         noise_chunk_w = noise_chunk_w["data"]
@@ -299,9 +304,8 @@ def real_noise_test():
     
         psd_results = {"Original": data_psd, "Tensorflow": tf_psd, "GWPY": ts_psd}
         plot_whitening_outputs(f, psd_results, "./py_ml_data/rn_psd_outputs.html")  
-        
-        if (i > 1):
-            break
 
 if __name__ == "__main__":
-    real_noise_test()
+    test_whiten_functions()
+    plot_whiten_functions()
+    #real_noise_test()
