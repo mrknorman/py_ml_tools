@@ -224,7 +224,7 @@ if __name__ == "__main__":
     # Call generatePhenom function
     
     sample_rate_hertz = 2048.0
-    example_duration_seconds = 8.0
+    onsource_duration_seconds = 8.0
     
     #0.25, 0.5
     
@@ -235,11 +235,11 @@ if __name__ == "__main__":
         force_generation = True,
         ifo = "L1",
         sample_rate_hertz = sample_rate_hertz,
-        example_duration_seconds = example_duration_seconds,
+        onsource_duration_seconds = onsource_duration_seconds,
         num_examples_per_batch = 32,
         order = "random",
         apply_whitening = False,
-        return_keys = ["data", "background"]
+        return_keys = ["onsource", "offsource"]
     )
     
     for background in islice(background_noise_iterator, 1):
@@ -251,7 +251,7 @@ if __name__ == "__main__":
                 mass_1_msun = 30, 
                 mass_2_msun = 30,
                 sample_rate_hertz = sample_rate_hertz,
-                duration_seconds = example_duration_seconds,
+                duration_seconds = onsource_duration_seconds,
                 inclination_radians = 1.0,
                 distance_mpc = 100,
                 reference_orbital_phase_in = 0.0,
@@ -271,10 +271,10 @@ if __name__ == "__main__":
         
         injection = tf.convert_to_tensor(injection[:, 1], dtype = tf.float32)
         injection = roll_vector_zero_padding(injection, int(1.2 * sample_rate_hertz), int(4.8 * sample_rate_hertz))
-        offsource = tf.cast(background["background"][0], dtype = tf.float32)
-        onsource  = tf.cast(background["data"][0], dtype = tf.float32)
+        offsource = tf.cast(background["offsource"][0], dtype = tf.float32)
+        onsource  = tf.cast(background["onsource"][0], dtype = tf.float32)
         
-        example_duation_seconds = 6.0
+        onsource_duration_seconds = 6.0
         
         scaled_injection = \
             scale_to_snr(
@@ -313,7 +313,7 @@ if __name__ == "__main__":
                     value,
                     onsource,
                     sample_rate_hertz,
-                    example_duration_seconds,
+                    onsource_duration_seconds,
                     apply_whitening = apply_whitening,
                     whiten_fft_length_seconds = whiten_fft_length_seconds,
                     whiten_overlap_seconds = whiten_overlap_seconds,
@@ -324,7 +324,7 @@ if __name__ == "__main__":
         
         scaled_injection = crop_samples(
             scaled_injection,
-            example_duation_seconds,
+            onsource_duration_seconds,
             sample_rate_hertz
             )
                 
@@ -346,7 +346,7 @@ if __name__ == "__main__":
         
         onsource_whitened_tf = crop_samples(
             onsource_whitened_tf,
-            example_duation_seconds,
+            onsource_duration_seconds,
             sample_rate_hertz
             )
         
@@ -356,7 +356,7 @@ if __name__ == "__main__":
         
         onsource_whitened_gwpy = crop_samples(
             onsource_whitened_gwpy,
-            example_duation_seconds,
+            onsource_duration_seconds,
             sample_rate_hertz
             )
         
@@ -370,7 +370,7 @@ if __name__ == "__main__":
         
         onsource_plus_injection_whitened_tf = crop_samples(
             onsource_plus_injection_whitened_tf,
-            example_duation_seconds,
+            onsource_duration_seconds,
             sample_rate_hertz
             )
                 
@@ -384,7 +384,7 @@ if __name__ == "__main__":
         
         injection_whitened_tf = crop_samples(
             injection_whitened_tf,
-            example_duation_seconds,
+            onsource_duration_seconds,
             sample_rate_hertz
             )
         
@@ -398,7 +398,7 @@ if __name__ == "__main__":
         
         scaled_injection_whitened_tf = crop_samples(
             scaled_injection_whitened_tf,
-            example_duation_seconds,
+            onsource_duration_seconds,
             sample_rate_hertz
             )
         
@@ -407,7 +407,7 @@ if __name__ == "__main__":
             injection_whitened_tf, 
             scaled_injection, 
             scaled_injection_whitened_tf, 
-            example_duration_seconds
+            onsource_duration_seconds
         )
         
         frequencies, onsource_plus_injection_whitened_tf_psd = \

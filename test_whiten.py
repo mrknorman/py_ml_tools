@@ -238,18 +238,18 @@ def real_noise_test():
     overlap=0.5
     num_trials=10
     
-    example_duration_seconds = 2.0
+    onsource_duration_seconds = 2.0
     
     background_noise_iterator = get_ifo_data(
         time_interval = O3,
         data_labels = ["noise", "glitches"],
         ifo = "L1",
         sample_rate_hertz = sample_rate_hertz,
-        example_duration_seconds = example_duration_seconds,
+        onsource_duration_seconds = onsource_duration_seconds,
         num_examples_per_batch = 32,
         order = "shortest_first",
         apply_whitening = False,
-        return_keys = ["data"]
+        return_keys = ["onsource"]
     )
     
     background_noise_iterator_w = get_ifo_data(
@@ -257,11 +257,11 @@ def real_noise_test():
         data_labels = ["noise", "glitches"],
         ifo = "L1",
         sample_rate_hertz = sample_rate_hertz,
-        example_duration_seconds = example_duration_seconds,
+        onsource_duration_seconds = onsource_duration_seconds,
         num_examples_per_batch = 32,
         order = "shortest_first",
         apply_whitening = True,
-        return_keys = ["data"]
+        return_keys = ["onsource"]
     )
     
     for i, (noise_chunk, noise_chunk_w) in islice(
@@ -299,7 +299,7 @@ def real_noise_test():
             
         results = {"Original": data, "Tensorflow": whitened_tf, "GWPY": whitened_ts, "Residuals": residuals, "Generator": noise_chunk_w}
         
-        t = np.linspace(0, example_duration_seconds, int(sample_rate_hertz*example_duration_seconds))
+        t = np.linspace(0, onsource_duration_seconds, int(sample_rate_hertz*onsource_duration_seconds))
         plot_whitening_outputs(t, results, "./py_ml_data/rn_whitening_outputs.html")  
     
         psd_results = {"Original": data_psd, "Tensorflow": tf_psd, "GWPY": ts_psd}

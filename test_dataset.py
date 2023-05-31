@@ -1,8 +1,11 @@
 from .dataset import get_ifo_data_generator, get_ifo_data, O3
 from .setup import setup_cuda
-from bokeh.plotting import figure, output_file, show
+from bokeh.plotting import figure, output_file, show, save
+from bokeh.models import ColumnDataSource
+
 from itertools import islice
 import numpy as np
+from tqdm import tqdm
 
 import tensorflow as tf
 
@@ -89,6 +92,32 @@ def test_noise():
             if (i > 32*100):
                 break
                 
+def plot_time_series(onsource, injections, sample_rate_hertz, onsource_duration_seconds, file_name='bokeh_plot.html'):
+    # Infer time axis from onsource_duration and sample rate
+    time_axis = np.linspace(0, onsource_duration_seconds, onsource.shape[-1])
+
+    # Take the first example from the batches
+    onsource_first = onsource[0]
+    injections_first = injections[0, 0]
+
+    # Preparing the data
+    source = ColumnDataSource(data=dict(time=time_axis, onsource=onsource_first, injections=injections_first))
+
+    # Prepare the output file (HTML)
+    output_file(file_name)
+
+    # Create a new plot with a title and axis labels
+    p = figure(title="Onsource and Injections over time", x_axis_label='Time (seconds)', y_axis_label='Amplitude')
+
+    # Add a line renderer for 'onsource' (background), line color set to blue
+    p.line('time', 'onsource', source=source, line_width=2, line_color="blue", legend_label="Onsource")
+
+    # Add a line renderer for 'injections', line color set to red
+    p.line('time', 'injections', source=source, line_width=2, line_color="red", legend_label="Injections")
+
+    # Save the result to HTML file
+    save(p)
+                
 def test_injection(): 
     
     sample_rate_hertz = 8196
@@ -98,7 +127,8 @@ def test_injection():
         {
             "type" : "cbc",
             "snr"  : 30,
-            "injection_chance" : 0.5,
+            "injection_chance" : 1.0,
+            "padding_seconds" : {"front" : 0.2, "back" : 0.1},
             "args" : {
                 "approximant_enum" : \
                     {"value" : 1, "distribution_type": "constant", "dtype" : int}, 
@@ -136,18 +166,29 @@ def test_injection():
         ifo = "L1",
         injection_configs = injection_configs,
         sample_rate_hertz = sample_rate_hertz,
-        example_duration_seconds = duration_seconds,
+        onsource_duration_seconds = duration_seconds,
         max_segment_size = 3600,
         num_examples_per_batch = 32,
         order = "random",
         apply_whitening = True,
-        return_keys = ["data"],
+        return_keys = ["onsource", "injections"],
         save_segment_data = True,
     )
     
-    for data in islice(ifo_data_generator, 10):
-        pass
+    for data in islice(ifo_data_generator, 1):
         
+        plot_time_series(
+            data['onsource'].numpy(), 
+            data['injections'].numpy(), 
+            sample_rate_hertz, 
+            duration_seconds, 
+            file_name='./py_ml_data/injection_test.html'
+        )
+        
+    for data in tqdm(islice(ifo_data_generator, 100)):
+        pass
+
+                
 if __name__ == "__main__":
     setup_cuda("0", verbose = True)    
     test_injection()
