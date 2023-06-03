@@ -79,7 +79,7 @@ class IFOData:
             self.data = tf.convert_to_tensor(self.data.value, dtype=tf.float32)
         elif (type(self.data) == np.ndarray):
             self.data = tf.convert_to_tensor(self.data, dtype=tf.float32)
-        
+                    
         self.duration = tf.cast(tf.shape(self.data)[0], tf.float32) / self.sample_rate
         self.dt = 1.0 / self.sample_rate
             
@@ -94,45 +94,51 @@ class IFOData:
     def numpy(self):
         """Converts the data to a numpy array."""
         return self.data.numpy()
-    
-    def random_subsection(
-        self, 
-        num_subsection_elements: int, 
-        num_background_elements: int,
+
+@tf.function
+def random_subsection(
+        data: tf.Tensor,
+        dt  : float,
+        t0  : float,
+        num_onsource_samples: int, 
+        num_offsource_samples: int, 
         num_examples_per_batch: int
     ):      
-        # Check if the input array is 1D
-        assert len(self.data.shape) == 1, "Input array must be 1D"
+        assert len(data.shape) == 1, "Input array must be 1D"
 
-        # Get the length of the input array
-        N = tf.shape(self.data)[0]
+        N = tf.shape(data)[0]
 
-        # Ensure num_subsection_elements + num_background_elements is smaller or 
-        # equal to N
-        assert num_subsection_elements + num_background_elements <= N, \
-            "num_subsection_elements + num_background_elements must be smaller " \
-            "or equal to the length of the array"
-
-        # Generate a random starting index for each element in the batch
-        maxval = N - num_subsection_elements - num_background_elements + 1
+        maxval = N - num_onsource_samples - num_offsource_samples + 1
         random_starts = tf.random.uniform(
             shape=(num_examples_per_batch,), 
-            minval=num_background_elements, 
-            maxval=maxval, dtype=tf.int32
+            minval=num_offsource_samples, 
+            maxval=maxval, 
+            dtype=tf.int32
         )
 
-        # Extract the subsections of the array for the entire batch
-        indices = tf.expand_dims(tf.range(num_subsection_elements), 0) + random_starts[:, tf.newaxis]
-        batch_subarrays = tf.gather(self.data, indices)
+        def slice_data(start, num_samples):
+            return tf.slice(data, [start], [num_samples])
 
-        # Extract the background chunks of the array for the entire batch
-        bg_indices = tf.expand_dims(tf.range(num_background_elements), 0) + (random_starts - num_background_elements)[:, tf.newaxis]
-        batch_background_chunks = tf.gather(self.data, bg_indices)
+        batch_subarrays = tf.map_fn(
+            lambda start: slice_data(start, num_onsource_samples), 
+            random_starts, 
+            fn_output_signature=tf.TensorSpec(
+                shape=[num_onsource_samples], dtype=tf.float32
+            )
+        )
 
-        # Calculate the t0 for each captured subsection
-        t0_subsections = self.t0 + tf.cast(random_starts, tf.float32) * self.dt
+        batch_background_chunks = tf.map_fn(
+            lambda start: \
+                slice_data(start - num_offsource_samples, num_offsource_samples), 
+            random_starts, 
+            fn_output_signature=tf.TensorSpec(
+                shape=[num_offsource_samples], dtype=tf.float32)
+        )
+
+        t0_subsections = tf.cast(t0, tf.float32) + tf.cast(random_starts, tf.float32) * tf.cast(dt, tf.float32)
 
         return batch_subarrays, batch_background_chunks, t0_subsections
+
     
 def get_segment_times(
     start: float,
@@ -358,8 +364,6 @@ def add_injections(
                 int((crop_duration \
                      + config["padding_seconds"]["front"])*sample_rate_hertz) 
             
-            print(batched_onsource.shape[-1], min_roll_num_samples, max_roll_num_samples)
-
             batched_injections = []
             for _ in range(num_batches):
                 if np.random.random() < config["injection_chance"]:
@@ -752,7 +756,7 @@ def get_ifo_data(
     seed: int = 1000,
     force_generation: bool = False,
     data_directory: Union[str, Path] = "./generator_data",
-    save_segment_data: bool = False,
+    save_segment_data: bool = True,
     return_keys = ["onsource", "offsource", "gps_time"],
     fduration = 1.0
 ):
@@ -812,20 +816,23 @@ def get_ifo_data(
                 f"segments/segment_{current_segment_start}_{current_segment_end}"
                             
             current_segment_data = None
-
+            
+            expected_duration_seconds = \
+                    current_segment_end - current_segment_start
             if (segment_key in f) and save_segment_data:
+                
                 print(
                     f"Reading segments of duration "
-                    f"{current_segment_end - current_segment_start}..."
+                    f"{expected_duration_seconds}..."
                 )
                 current_segment_data = \
                     IFOData(
                         f[segment_key][()], 
                         current_segment_start, 
-                    sample_rate_hertz)
+                        sample_rate_hertz)
             else: 
                 print(f"Acquiring segments of duration "
-                      f"{current_segment_end - current_segment_start}..."
+                      f"{expected_duration_seconds}..."
                      )
                 try:
                     current_segment_data = \
@@ -840,8 +847,7 @@ def get_ifo_data(
                     #Would be nice to do this on the gpu:
                     current_segment_data = \
                         current_segment_data.resample(sample_rate_hertz)
-                    
-                    
+                
                 except Exception as e:
                     print(f"Unexpected error: {type(e).__name__}, {str(e)}")
                     continue
@@ -861,7 +867,6 @@ def get_ifo_data(
                     )
             print("Complete!")
             
-            
             current_segment_data = current_segment_data.scale(scale_factor)   
             
             current_max_batch_count = \
@@ -872,22 +877,26 @@ def get_ifo_data(
             
             for _ in range(current_max_batch_count):
                 
-                num_subsection_elements = \
+                num_onsource_samples = \
                     int(
                         (onsource_duration_seconds + fduration)
                         *sample_rate_hertz
                     )
-                num_offsource_elements = \
+                num_offsource_samples = \
                     int(offsource_duarion_seconds * sample_rate_hertz)
                 
                 batched_onsource, batched_offsource, batched_gps_times = \
-                    current_segment_data.random_subsection(
-                        num_subsection_elements, 
-                        num_offsource_elements, 
+                    random_subsection(
+                        current_segment_data.data,
+                        current_segment_data.dt,
+                        current_segment_data.t0,
+                        num_onsource_samples, 
+                        num_offsource_samples, 
                         num_examples_per_batch
                     )
-                
+                                               
                 #Add injection: 
+                batched_injections = None
                 if injection_configs:
                     batched_onsource, batched_injections, injection_paramters = \
                         add_injections(
@@ -899,6 +908,12 @@ def get_ifo_data(
                             batched_onsource, 
                             batched_offsource
                         )
+                    
+                    batched_injections = crop_samples(
+                        batched_injections, 
+                        onsource_duration_seconds, 
+                        sample_rate_hertz
+                    )
                                 
                 # Whiten data: 
                 if apply_whitening:
@@ -919,13 +934,7 @@ def get_ifo_data(
                     onsource_duration_seconds, 
                     sample_rate_hertz
                 )
-                
-                batched_injections = crop_samples(
-                    batched_injections, 
-                    onsource_duration_seconds, 
-                    sample_rate_hertz
-                )
-                                
+                              
                 return_dict = {}
                 if 'onsource' in return_keys:
                     return_dict['onsource'] = tf.cast(batched_onsource, tf.float16)
@@ -988,16 +997,13 @@ def get_ifo_data_generator(
         'injections' : 
             tf.TensorSpec(
                 shape=(
-                    len(kwargs.get('injection_configs', {}).keys()), 
+                    len(kwargs.get('injection_configs', {})), 
                     kwargs.get('num_examples_per_batch', 1), 
-                    int((kwargs.get('onsource_duration_seconds', 1.0) 
-                         + kwargs.get('fduration', 1.0))*sample_rate_hertz)
+                    int(kwargs.get('onsource_duration_seconds', 1.0)
+                        *sample_rate_hertz)
                 ), 
                 dtype=tf.float16
-            ),
-        'injection_parameters': 
-            tf.TensorSpec(
-            ),
+            )
     }
     
     output_signature = {k: output_signature[k] for k in return_keys}

@@ -5,6 +5,7 @@ import numpy as np
 from tensorflow.python.distribute.distribute_lib import Strategy
 from tensorflow.python.framework.ops import EagerTensor
 from tensorflow.data import Dataset
+import subprocess
 
 def setup_cuda(device_num: str, verbose: bool = False) -> Strategy:
     """
@@ -61,6 +62,58 @@ def setup_cuda(device_num: str, verbose: bool = False) -> Strategy:
 
     # Return the MirroredStrategy instance.
     return strategy
+
+def find_available_GPUs(
+    min_memory_MB : int, 
+    max_needed : int = -1
+    ):
+    """
+    Finds the available GPUs that have memory available more than min_memory.
+
+    Parameters
+    ----------
+    min_memory_MB : int
+        The minimum free memory required.
+
+    Returns
+    -------
+    available_gpus : str
+        The list of indices of available GPUs ins string form for easy digestion
+        by setup_cuda above.
+    """
+    
+    # Run the NVIDIA-SMI command
+    try:
+        output = subprocess.check_output(
+            [
+                "/usr/bin/nvidia-smi", 
+                 "--query-gpu=memory.free", 
+                 "--format=csv,noheader,nounits"
+            ], 
+            stderr=subprocess.STDOUT, 
+            universal_newlines=True
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"Unable to run NVIDIA-SMI. Please check your environment. " \
+              "Exiting! Error: {e.output}")
+        return None
+
+    # Split the output into lines
+    memory_array = output.split("\n")
+    # Remove the last empty line if it exists
+    if memory_array[-1] == "":
+        memory_array = memory_array[:-1]
+
+    # Convert to integers
+    memory_array = np.array(memory_array, dtype=int)
+    
+    # Find the indices of GPUs which have available memory more than min_memory_MB
+    available_gpus = np.where(memory_array > min_memory_MB)[0].tolist()
+    
+    if (max_needed != -1) and (max_needed < len(available_gpus)):
+        available_gpus = available_gpus[:max_needed]
+
+    return ",".join(str(gpu) for gpu in available_gpus)
 
 def load_datasets(paths):
     

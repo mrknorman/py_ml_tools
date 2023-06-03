@@ -7,6 +7,9 @@ from itertools import islice
 import numpy as np
 from tqdm import tqdm
 
+import matplotlib.pyplot as plt
+from scipy.signal import spectrogram
+
 import tensorflow as tf
 
 def test_noise():
@@ -91,6 +94,35 @@ def test_noise():
             
             if (i > 32*100):
                 break
+                
+def plot_spectrogram(time_series, sample_rate_hertz, nperseg=128, noverlap=64, file_name='spectrogram.png'):
+    # Calculate the spectrogram
+    f, t, Sxx = spectrogram(time_series, fs=sample_rate_hertz, nperseg=nperseg, noverlap=noverlap)
+
+    # Convert to dB
+    Sxx_dB = 10 * np.log10(Sxx)
+
+    # Create a new figure
+    plt.figure(figsize=(10, 6))
+
+    # Plot the spectrogram
+    plt.pcolormesh(t, f, Sxx_dB, shading='gouraud', cmap='inferno')
+    
+    # Set the y-axis to log scale
+    plt.yscale('log', base=2)
+
+    # Set the title and labels
+    plt.title('Spectrogram')
+    plt.xlabel('Time (seconds)')
+    plt.ylabel('Frequency (Hz)')
+    
+    plt.ylim(8, 2048)
+
+    # Add a colorbar
+    plt.colorbar(format='%+2.0f dB')
+
+    # Save the figure to a file
+    plt.savefig(file_name)
                 
 def plot_time_series(onsource, injections, sample_rate_hertz, onsource_duration_seconds, file_name='bokeh_plot.html'):
     # Infer time axis from onsource_duration and sample rate
@@ -184,7 +216,30 @@ def test_injection():
             duration_seconds, 
             file_name='./py_ml_data/injection_test.html'
         )
+        plot_spectrogram(
+            data['onsource'][0].numpy(), 
+            sample_rate_hertz, 
+            nperseg=256, 
+            noverlap=128, 
+            file_name='./py_ml_data/spectrogram.png'
+        )
         
+    ifo_data_generator = get_ifo_data_generator(
+        time_interval = O3,
+        data_labels = ["noise", "glitches"],
+        ifo = "L1",
+        injection_configs = injection_configs,
+        sample_rate_hertz = sample_rate_hertz,
+        onsource_duration_seconds = duration_seconds,
+        max_segment_size = 3600,
+        num_examples_per_batch = 32,
+        order = "random",
+        apply_whitening = True,
+        return_keys = ["onsource", "injections"],
+        save_segment_data = True,
+    )
+    
+    ifo_data_generator = ifo_data_generator.take(100)
     for data in tqdm(islice(ifo_data_generator, 100)):
         pass
 
