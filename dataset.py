@@ -16,9 +16,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from itertools import cycle
 
-from .cuphenom.py.cuphenom import generate_phenom, randomise_arguments
-from .whiten   import whiten
-from .snr      import scale_to_snr
+from .cuphenom.py.cuphenom import generate_phenom
+from .whiten import whiten
+from .snr    import scale_to_snr
+from .setup  import randomise_arguments, randomise_dict
 
 import h5py
 
@@ -39,10 +40,10 @@ class ObservingRun:
     def _to_gps_time(date_time: datetime) -> float:
         gps_epoch = datetime(1980, 1, 6, 0, 0, 0)
         time_diff = date_time - gps_epoch
-        leap_seconds = 18  # current number of leap seconds as of 2021 (change if needed)
+        # Current number of leap seconds as of 2021 (change if needed):
+        leap_seconds = 18  
         total_seconds = time_diff.total_seconds() - leap_seconds
         return total_seconds
-
 
 IFOS = ("H1", "L1", "V1")
 
@@ -61,8 +62,10 @@ observing_run_data = (
      {"best": "DCS-ANALYSIS_READY_C01:1"})
 )
 
-OBSERVING_RUNS = {name: ObservingRun(name, start_date_time, end_date_time, channels, frame_types, state_flags)
-                  for name, start_date_time, end_date_time, channels, frame_types, state_flags in observing_run_data}
+OBSERVING_RUNS = {
+    name: ObservingRun(
+        name, start_date_time, end_date_time, channels, frame_types, state_flags
+    ) for name, start_date_time, end_date_time, channels, frame_types, state_flags in observing_run_data}
 
 O1 = OBSERVING_RUNS["O1"]
 O2 = OBSERVING_RUNS["O2"]
@@ -80,7 +83,8 @@ class IFOData:
         elif (type(self.data) == np.ndarray):
             self.data = tf.convert_to_tensor(self.data, dtype=tf.float32)
                     
-        self.duration = tf.cast(tf.shape(self.data)[0], tf.float32) / self.sample_rate
+        self.duration = \
+            tf.cast(tf.shape(self.data)[0], tf.float32) / self.sample_rate
         self.dt = 1.0 / self.sample_rate
             
     def downsample(self, new_sample_rate: Union[int, float]):    
@@ -135,7 +139,8 @@ def random_subsection(
                 shape=[num_offsource_samples], dtype=tf.float32)
         )
 
-        t0_subsections = tf.cast(t0, tf.float32) + tf.cast(random_starts, tf.float32) * tf.cast(dt, tf.float32)
+        t0_subsections = tf.cast(t0, tf.float32) + \
+            tf.cast(random_starts, tf.float32) * tf.cast(dt, tf.float32)
 
         return batch_subarrays, batch_background_chunks, t0_subsections
 
@@ -280,7 +285,8 @@ def ensure_directory_exists(
     directory = Path(directory)  # Convert to Path if not already
     if not directory.exists():
         directory.mkdir(parents=True, exist_ok=True)
-        
+
+@tf.function
 def roll_vector_zero_padding(vector, min_roll, max_roll):
     roll_amount = tf.random.uniform(
         shape=(), minval = min_roll, maxval=max_roll, dtype=tf.int32
@@ -303,7 +309,10 @@ def add_injections(
     fduration: float,
     num_batches: int, 
     batched_onsource: tf.Tensor, 
-    batched_offsource: tf.Tensor
+    batched_offsource: tf.Tensor,
+    batch_index: int,
+    injection_indicies: int,
+    injection_files
     ) -> Tuple[tf.Tensor, List[tf.Tensor]]:
     """
     This function processes a list of injection configurations. Each 
@@ -352,7 +361,10 @@ def add_injections(
     
     crop_duration = fduration / 2.0
 
-    for config in injection_configs:
+    for i, config in enumerate(injection_configs):
+        
+        injection_file = injection_files[i]
+        
         if config["type"] == "cbc":
             config["args"].update(common_args)
             
@@ -364,31 +376,65 @@ def add_injections(
                 int((crop_duration \
                      + config["padding_seconds"]["front"])*sample_rate_hertz) 
             
+            if type(config["snr"]) == np.ndarray:  
+                snr = config["snr"][-1]
+                if batch_index < len(config["snr"]):
+                    snr = config["snr"][batch_index]
+            elif type(config["snr"]) == dict:
+                snr = randomise_dict(config["snr"])
+            else:
+                raise ValueError("Unsupported SNR type!")
+            
             batched_injections = []
+            injection_snrs = []
+            
+            injection_key = f"injection_{injection_indicies[i]}"
+            
             for _ in range(num_batches):
                 if np.random.random() < config["injection_chance"]:
-                    injection, injection_paramters = randomise_arguments(
-                            config["args"], generate_phenom
-                    )
-                    injection *= 10.0E20 #must exist for precision reasons.
-                    injection = tf.convert_to_tensor(
-                        injection[:, 1], dtype=tf.float32
-                    )
+                    
+                    if (injection_key in injection_file):
+                        injection = injection_file[injection_key][()]
+                        injection_parameters = {}
+
+                        injection = tf.convert_to_tensor(
+                            injection, dtype=tf.float32
+                        )
+                    else: 
+                        injection, injection_parameters = randomise_arguments(
+                                config["args"], generate_phenom
+                        )
+                        injection *= 10.0E20 #must exist for precision reasons.
+                        injection = tf.convert_to_tensor(
+                            injection[:, 1], dtype=tf.float32
+                        )
+                        
+                        injection_file.create_dataset(
+                            injection_key, 
+                            data = injection.numpy()
+                        )
+                        
                     injection = roll_vector_zero_padding(
                         injection, min_roll_num_samples, max_roll_num_samples
                     )
+                    
+                    injection_snrs.append(snr)
+                    injection_indicies[i] += 1.0
                 else:
                     injection = tf.zeros(batched_onsource.shape[-1])
-                
-                batched_injections.append(injection)
+                    injection_snrs.append(0.0)
 
+                batched_injections.append(injection)
+                    
             batched_injections = tf.stack(batched_injections)
-                        
+            
+            injection_parameters["snr"] = tf.convert_to_tensor(injection_snrs)
+                                    
             scaled_injection = \
                 scale_to_snr(
                     batched_injections, 
                     batched_offsource, 
-                    config["snr"],
+                    snr,
                     window_duration_seconds=1.0,
                     sample_rate_hertz=sample_rate_hertz,
                     fft_duration_seconds=1.0,
@@ -400,7 +446,7 @@ def add_injections(
             
     injections = tf.stack(injections)
 
-    return batched_onsource, injections, injection_paramters
+    return batched_onsource, injections, injection_parameters, injection_indicies
 
 def process_time_interval(
     time_interval: Union[Tuple, 'ObservingRun'], 
@@ -647,10 +693,16 @@ def generate_hash_from_list(input_list: List[Any]) -> str:
 
     return input_hash
 
+def get_sorted_values(dictionary):
+    sorted_keys = sorted(dictionary.keys())
+    sorted_values = [dictionary[key] for key in sorted_keys]
+    return sorted_values
+
 def generate_filenames(
     data_directory: Union[str, Path],         
     segment_parameters: List[Any], 
-    injection_configs: List[Dict[str, Any]]
+    injection_configs: List[Dict[str, Any]],
+    seed: int
     ) -> (Path, List[Path]):
     """
     Generate unique filenames based on a hash of the input parameters and 
@@ -677,10 +729,10 @@ def generate_filenames(
     segment_filename = \
         Path(data_directory) / f"segment_data_{segment_hash}.hdf5"
     
-    # Generate the hashes for the injection configurations
+    # Generate the hashes for the injection configurations    
     injection_hashes = [ 
         generate_hash_from_list( 
-            list(config.values()) + list(config['args'].values())
+            get_sorted_values(config['args']) + [seed]
         ) 
         for config in injection_configs
     ]
@@ -723,7 +775,8 @@ def crop_samples(
     if len(batched_onsource.shape) == 1:
         batched_onsource = tf.expand_dims(batched_onsource, 0)
     
-    # Calculate the desired number of samples based on example duration and sample rate
+    # Calculate the desired number of samples based on example duration and 
+    # sample rate:
     desired_num_samples = int(onsource_duration_seconds * sample_rate_hertz)
     
     # Calculate the start and end index for cropping
@@ -757,7 +810,8 @@ def get_ifo_data(
     force_generation: bool = False,
     data_directory: Union[str, Path] = "./generator_data",
     save_segment_data: bool = True,
-    return_keys = ["onsource", "offsource", "gps_time"],
+    input_keys = ["onsource", "offsource", "gps_time", "injectons", "snr"],
+    output_keys = ["onsource", "offsource", "gps_time", "injectons", "snr"],
     fduration = 1.0
 ):
     data_directory = Path(data_directory)
@@ -784,11 +838,12 @@ def get_ifo_data(
             str(data_labels), 
             sample_rate_hertz
         ]  
-    segment_filename, injection_file_names = \
+    segment_filename, injection_filenames = \
         generate_filenames(
             data_directory,         
             segment_parameters, 
-            injection_configs
+            injection_configs,
+            seed
         )
         
     # Get segment start and stop times given input parameters
@@ -807,9 +862,16 @@ def get_ifo_data(
             order
         )
     
-    with open_hdf5_file(segment_filename) as f:
+    batch_index = 0
+    injection_indicies = [0] * len(injection_configs)
+    
+    with open_hdf5_file(segment_filename) as segment_file:
         
-        f.require_group("segments")
+        injection_files = [
+            open_hdf5_file(filename) for filename in injection_filenames
+        ]
+        
+        segment_file.require_group("segments")
         for current_segment_start, current_segment_end in valid_segments:
             
             segment_key = \
@@ -819,7 +881,7 @@ def get_ifo_data(
             
             expected_duration_seconds = \
                     current_segment_end - current_segment_start
-            if (segment_key in f) and save_segment_data:
+            if (segment_key in segment_file) and save_segment_data:
                 
                 print(
                     f"Reading segments of duration "
@@ -827,7 +889,7 @@ def get_ifo_data(
                 )
                 current_segment_data = \
                     IFOData(
-                        f[segment_key][()], 
+                        segment_file[segment_key][()], 
                         current_segment_start, 
                         sample_rate_hertz)
             else: 
@@ -861,7 +923,7 @@ def get_ifo_data(
                 #current_segment_data = current_segment_data.downsample(sample_rate_hertz) 
                 
                 if save_segment_data:
-                    f.create_dataset(
+                    segment_file.create_dataset(
                         segment_key, 
                         data = current_segment_data.numpy()
                     )
@@ -898,7 +960,7 @@ def get_ifo_data(
                 #Add injection: 
                 batched_injections = None
                 if injection_configs:
-                    batched_onsource, batched_injections, injection_paramters = \
+                    batched_onsource, batched_injections, injection_parameters, injection_indicies = \
                         add_injections(
                             injection_configs, 
                             sample_rate_hertz, 
@@ -906,7 +968,10 @@ def get_ifo_data(
                             fduration,
                             num_examples_per_batch, 
                             batched_onsource, 
-                            batched_offsource
+                            batched_offsource,
+                            batch_index,
+                            injection_indicies,
+                            injection_files
                         )
                     
                     batched_injections = crop_samples(
@@ -934,39 +999,60 @@ def get_ifo_data(
                     onsource_duration_seconds, 
                     sample_rate_hertz
                 )
-                              
-                return_dict = {}
-                if 'onsource' in return_keys:
-                    return_dict['onsource'] = tf.cast(batched_onsource, tf.float16)
-                if 'offsource' in return_keys:
-                    return_dict['offsource'] = \
+                 
+                input_dict = {}
+                if 'onsource' in input_keys:
+                    input_dict['onsource'] = tf.cast(batched_onsource, tf.float16)
+                if 'offsource' in input_keys:
+                    input_dict['offsource'] = \
                         tf.cast(batched_offsource, tf.float16)
-                if 'gps_time' in return_keys:
-                    return_dict['gps_time'] = \
+                if 'gps_time' in input_keys:
+                    input_dict['gps_time'] = \
                         tf.convert_to_tensor(batched_gps_times, dtype=tf.int64)
-                if 'injections' in return_keys:
-                    return_dict['injections'] = batched_injections
-                if 'injection_parameters' in return_keys:
-                    return_dict['injection_parameters'] = injection_paramters
+                if 'injections' in input_keys:
+                    input_dict['injections'] = batched_injections
+                if 'snr' in input_keys:
+                    input_dict['snr'] = injection_paramters['snr']
+                    
+                ouput_dict = {}
+                if 'onsource' in output_keys:
+                    ouput_dict['onsource'] = tf.cast(batched_onsource, tf.float16)
+                if 'offsource' in output_keys:
+                    ouput_dict['offsource'] = \
+                        tf.cast(batched_offsource, tf.float16)
+                if 'gps_time' in output_keys:
+                    ouput_dict['gps_time'] = \
+                        tf.convert_to_tensor(batched_gps_times, dtype=tf.int64)
+                if 'injections' in output_keys:
+                    ouput_dict['injections'] = batched_injections
+                if 'snr' in output_keys:
+                    ouput_dict['snr'] = injection_parameters['snr']
+                    
+                batch_index += 1;
                 
-                yield return_dict
+                yield (input_dict, ouput_dict)
 
 def get_ifo_data_generator(
     time_interval: Union[tuple, ObservingRun], 
     data_labels: List[str], 
     ifo: str,
-    sample_rate_hertz: float,    
-    return_keys = [
+    sample_rate_hertz: float,        
+    input_keys = [
         "onsource", 
         "offsource", 
         "gps_time", 
         "injections", 
-        "injection_parameters"
-    ],
+        "snr"],
+    output_keys = [
+        "onsource", 
+        "offsource", 
+        "gps_time", 
+        "injections", 
+        "snr"],
     **kwargs  # Capture all other arguments
     ):
     
-    output_signature = {
+    output_signature_dict = {
         'onsource'       : \
             tf.TensorSpec(
                 shape=(
@@ -1003,10 +1089,20 @@ def get_ifo_data_generator(
                         *sample_rate_hertz)
                 ), 
                 dtype=tf.float16
-            )
+            ),
+        'snr' : 
+            tf.TensorSpec(
+                shape=(
+                    kwargs.get('num_examples_per_batch', 1)
+                ), 
+                dtype=tf.float64
+            ),
     }
     
-    output_signature = {k: output_signature[k] for k in return_keys}
+    output_signature = (
+        {k: output_signature_dict[k] for k in input_keys},
+        {k: output_signature_dict[k] for k in output_keys}
+    )
     
     generator = lambda: \
         get_ifo_data(
@@ -1014,7 +1110,8 @@ def get_ifo_data_generator(
             data_labels, 
             ifo, 
             sample_rate_hertz, 
-            return_keys = return_keys, 
+            input_keys = input_keys, 
+            output_keys = output_keys,
             **kwargs
         )
     

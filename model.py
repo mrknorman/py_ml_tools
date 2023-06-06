@@ -4,6 +4,11 @@ from typing import Union, List, Dict
 import numpy as np
 from copy import deepcopy
 
+import tensorflow_probability as tfp
+
+def negative_loglikelihood(targets, estimated_distribution):
+    return -estimated_distribution.log_prob(targets)
+
 @dataclass
 class HyperParameter:
     possible_values: Dict[str, Union[str, List[Union[int, float]]]]
@@ -165,6 +170,8 @@ class ModelBuilder:
         self.optimizer = optimizer
         self.loss = loss
         
+        self.fitness = []
+        
         self.metrics = []
 
     def build_model(self, input_shape: Union[int, tuple], output_shape: int):
@@ -175,8 +182,10 @@ class ModelBuilder:
         input_shape: Shape of the input data.
         output_shape: Shape of the output data.
         """        
+        
+        
         model = tf.keras.Sequential()
-        model.add(tf.keras.layers.InputLayer(input_shape=input_shape))
+        model.add(tf.keras.layers.InputLayer(input_shape=input_shape, name='onsource'))
         model.add(tf.keras.layers.Reshape((-1, 1)))
 
         for layer in self.layers:
@@ -199,12 +208,21 @@ class ModelBuilder:
                 raise ValueError(f"Layer type '{layer.layer_type.value}' not recognized")
         
         model.add(tf.keras.layers.Flatten())
-        model.add(tf.keras.layers.Dense(output_shape, activation='softmax'))
-        model.compile(optimizer=self.optimizer, loss=self.loss)
+        model.add(tf.keras.layers.Dense(2, activation='relu'))
         
+        model.add(tfp.layers.IndependentNormal(1, name = 'snr'))
+        
+        model.compile(optimizer=self.optimizer, loss=self.loss,
+                metrics=[tf.keras.metrics.RootMeanSquaredError()])
+                
         self.model = model
 
-    def train_model(self, train_dataset: tf.data.Dataset, num_epochs: int):
+    def train_model(
+        self, 
+        train_dataset: tf.data.Dataset, 
+        num_batches: int, 
+        num_epochs: int = 1
+        ):
         """
         Trains the model.
         
@@ -216,16 +234,15 @@ class ModelBuilder:
             self.model.fit(
                 train_dataset, 
                 epochs=num_epochs, 
+                steps_per_epoch=num_batches,
                 batch_size=self.batch_size
             )
         )
         
-        print(self.metrics)
-        
     def validate_model(self, validation_dataset: tf.data.Dataset):
-        
+        pass
 
-    def test_model(self, validation_datasets: tf.data.Dataset, batch_size: int):
+    def test_model(self, validation_datasets: tf.data.Dataset, num_batches: int):
         """
         Tests the model.
         
@@ -233,7 +250,13 @@ class ModelBuilder:
         validation_datasets: Dataset to test on.
         batch_size: Batch size to use when testing.
         """
-        self.model.evaluate(validation_datasets, batch_size=batch_size)
+        
+        self.fitness.append(1.0 / self.model.evaluate(validation_datasets, steps=num_batches)[0])
+        
+        return self.fitness[-1]
+    
+    def check_death(self, patience):
+        return np.all(self.fitness[-int(patience)] > self.fitness[-int(patience)+1:])
         
     def summary(self):
         """
@@ -283,9 +306,8 @@ class Population:
         max_population_size: int,
         genome_template: int,
         input_size : int,
-        output_size : int 
+        output_size : int
     ):
-        
         self.initial_population_size = initial_population_size
         self.current_population_size = initial_population_size
         self.max_population_size = max_population_size
@@ -305,7 +327,7 @@ class Population:
             
             genome_template['base']['num_layers'].randomize()
             genome_template['base']['optimizer'].randomize()
-            genome_template['base']['batch_size'].randomize()
+            self.batch_size = genome_template['base']['batch_size'].randomize()
             
             for i in range(genome_template['base']['num_layers'].value):
                 layers.append(
@@ -316,7 +338,7 @@ class Population:
             builder = ModelBuilder(
                 layers, 
                 optimizer = genome_template['base']['optimizer'].value, 
-                loss ='sparse_categorical_crossentropy', 
+                loss = negative_loglikelihood, 
                 batch_size = genome_template['base']['batch_size'].value
             )
 
@@ -355,15 +377,49 @@ class Population:
         # Find the index of the individual to select.
         for i in range(len(self.population)):
             if r <= cumulative_probs[i]:
-                return self.population[i]
+                return i
 
         # If we've gotten here, just return the last individual in the population.
         # This should only happen due to rounding errors, and should be very rare.
         return self.population[-1]
     
-    def train_population(self, num_generations, training_ds):
-        for i in range(self.current_population_size*num_generations):
-            self.roulette_wheel_selection().train_model(training_ds, 1)
+    def train_population(
+        self, 
+        num_generations, 
+        num_train_examples, 
+        num_validate_examples, 
+        num_examples_per_batch, 
+        ds
+    ):
+                
+        num_train_batches = int(num_train_examples // num_examples_per_batch)
+        
+        num_validate_batches = int(num_validate_examples // num_examples_per_batch)
+        
+        for i in range(self.current_population_size):
+            training_ds = ds.take(num_train_batches)
+            validation_ds = ds.take(num_validate_batches)
+            
+            model = self.population[i]
+            model.train_model(training_ds, num_train_batches)
+            self.fitnesses[i] = \
+                model.test_model(validation_ds, num_validate_batches)
+        
+        print(self.fitnesses)
+        
+        for _ in range(self.current_population_size*(num_generations - 1)):
+            training_ds = ds.take(num_train_batches)
+            validation_ds = ds.take(num_validate_batches)
+            
+            i = self.roulette_wheel_selection()
+            self.population[i].train_model(training_ds, num_train_batches)
+            self.fitnesses[i] = \
+                model.test_model(validation_ds, num_validate_batches)
+            
+            print("is_alive:", model.check_death(10))
+                        
+            print(self.fitnesses)
+            print(mean(self.fitnesses))
         
         
         

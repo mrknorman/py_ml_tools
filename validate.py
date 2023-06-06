@@ -77,13 +77,12 @@ def calculate_far_scores(
     .prefetch(tf.data.experimental.AUTOTUNE).with_options(options)
     
     # Calculating the number of steps for model prediction
-    num_steps = int(num_examples // num_examples_per_batch)
-    noise_ds = noise_ds.take(num_examples)
+    num_batches = int(num_examples // num_examples_per_batch)
+    noise_ds = noise_ds.take(num_batches)
     
     # Predicting the scores and getting the second column ([:, 1])
-    far_scores = model.predict(noise_ds, steps = num_steps, verbose=2)
+    far_scores = model.predict(noise_ds, steps = num_batches, verbose=2)
     far_scores = nan_to_zero(far_scores)
-    print(far_scores[:, 1])
     
     return far_scores[:, 1]
 
@@ -200,4 +199,219 @@ def validate_far(
 
     return score_thresholds
 
+def validate_efficiency(
+    model: tf.keras.Model,
+    sample_rate_hertz: int,
+    onsource_duration_seconds: float,
+    ifo: str,
+    time_interval: str = O3,
+    num_examples: int = 1.0E5,
+    num_examples_per_batch: int = 32,
+    seed: int = 100,
+    max_snr: float = 10.0
+    ):
     
+    num_examples = int(num_examples)
+    num_batches = int(num_examples // num_examples_per_batch)
+    
+    injection_configs = [
+        {
+            "type" : "cbc",
+            "snr"  : np.linspace(0.0, max_snr, num_batches),
+            "injection_chance" : 1.0,
+            "padding_seconds" : {"front" : 0.2, "back" : 0.1},
+            "args" : {
+                "approximant_enum" : \
+                    {"value" : 1, "distribution_type": "constant", "dtype" : int}, 
+                "mass_1_msun" : \
+                    {"min_value" : 5, "max_value": 95, "distribution_type": "uniform"},
+                "mass_2_msun" : \
+                    {"min_value" : 5, "max_value": 95, "distribution_type": "uniform"},
+                "sample_rate_hertz" : \
+                    {"value" : sample_rate_hertz, "distribution_type": "constant"},
+                "duration_seconds" : \
+                    {"value" : onsource_duration_seconds, "distribution_type": "constant"},
+                "inclination_radians" : \
+                    {"min_value" : 0, "max_value": np.pi, "distribution_type": "uniform"},
+                "distance_mpc" : \
+                    {"min_value" : 10, "max_value": 1000, "distribution_type": "uniform"},
+                "reference_orbital_phase_in" : \
+                    {"min_value" : 0, "max_value": 2*np.pi, "distribution_type": "uniform"},
+                "ascending_node_longitude" : \
+                    {"min_value" : 0, "max_value": 2*np.pi, "distribution_type": "uniform"},
+                "eccentricity" : \
+                    {"min_value" : 0, "max_value": 0.1, "distribution_type": "uniform"},
+                "mean_periastron_anomaly" : \
+                    {"min_value" : 0, "max_value": 2*np.pi, "distribution_type": "uniform"},
+                "spin_1_in" : \
+                    {"min_value" : -0.5, "max_value": 0.5, "distribution_type": "uniform", "num_values" : 3},
+                "spin_2_in" : \
+                    {"min_value" : -0.5, "max_value": 0.5, "distribution_type": "uniform", "num_values" : 3}
+            }
+        }
+    ]
+    
+    # Setting options for data distribution
+    options = tf.data.Options()
+    options.experimental_distribute.auto_shard_policy = AutoShardPolicy.DATA
+    
+     # Creating the noise dataset
+    cbc_ds = get_ifo_data_generator(
+        time_interval = time_interval,
+        data_labels = ["noise", "glitches"],
+        ifo = ifo,
+        injection_configs = injection_configs,
+        sample_rate_hertz = sample_rate_hertz,
+        onsource_duration_seconds = onsource_duration_seconds,
+        max_segment_size = 3600,
+        num_examples_per_batch = num_examples_per_batch,
+        order = "random",
+        seed = seed,
+        apply_whitening = True,
+        return_keys = ["onsource"], 
+    ).map(getInput, num_parallel_calls=tf.data.AUTOTUNE) \
+    .prefetch(tf.data.experimental.AUTOTUNE).with_options(options)
+    
+    # Calculating the number of steps for model prediction
+    cbc_ds = cbc_ds.take(num_batches)
+    
+    # Predicting the scores and getting the second column ([:, 1])
+    efficiency_scores = model.predict(cbc_ds, steps = num_batches, verbose=2)
+    efficiency_scores = nan_to_zero(efficiency_scores)
+    
+    return efficiency_scores
+
+@tf.function
+def roc_curve_and_auc(y_true, y_scores, chunk_size=500):
+    num_thresholds = 1000
+     # Use logspace with a range between 0 and 6, which corresponds to values between 1 and 1e-6
+    log_thresholds = tf.exp(tf.linspace(0, -6, num_thresholds))
+    # Generate thresholds focusing on values close to 1
+    thresholds = 1 - log_thresholds
+    
+    thresholds = tf.cast(thresholds, tf.float32)
+    y_true = tf.cast(y_true, tf.float32)
+
+    num_samples = y_true.shape[0]
+    num_chunks = (num_samples + chunk_size - 1) // chunk_size
+
+    # Initialize accumulators for true positives, false positives, true negatives, and false negatives
+    tp_acc = tf.zeros(num_thresholds, dtype=tf.float32)
+    fp_acc = tf.zeros(num_thresholds, dtype=tf.float32)
+    fn_acc = tf.zeros(num_thresholds, dtype=tf.float32)
+    tn_acc = tf.zeros(num_thresholds, dtype=tf.float32)
+
+    # Process data in chunks
+    for chunk_idx in range(num_chunks):
+        start_idx = chunk_idx * chunk_size
+        end_idx = min((chunk_idx + 1) * chunk_size, num_samples)
+
+        y_true_chunk = y_true[start_idx:end_idx]
+        y_scores_chunk = y_scores[start_idx:end_idx]
+
+        y_pred = tf.expand_dims(y_scores_chunk, 1) >= thresholds
+        y_pred = tf.cast(y_pred, tf.float32)
+
+        y_true_chunk = tf.expand_dims(y_true_chunk, axis=-1)
+        tp = tf.reduce_sum(y_true_chunk * y_pred, axis=0)
+        fp = tf.reduce_sum((1 - y_true_chunk) * y_pred, axis=0)
+        fn = tf.reduce_sum(y_true_chunk * (1 - y_pred), axis=0)
+        tn = tf.reduce_sum((1 - y_true_chunk) * (1 - y_pred), axis=0)
+
+        # Update accumulators
+        tp_acc += tp
+        fp_acc += fp
+        fn_acc += fn
+        tn_acc += tn
+
+    tpr = tp_acc / (tp_acc + fn_acc)
+    fpr = fp_acc / (fp_acc + tn_acc)
+
+    auc = tf.reduce_sum((fpr[:-1] - fpr[1:]) * (tpr[:-1] + tpr[1:])) / 2
+
+    return fpr, tpr, auc
+
+def validate_roc(    
+    model: tf.keras.Model,
+    sample_rate_hertz: int,
+    onsource_duration_seconds: float,
+    ifo: str,
+    time_interval: str = O3,
+    num_examples: int = 1.0E5,
+    num_examples_per_batch: int = 32,
+    seed: int = 100
+    ):
+    
+    injection_configs = [
+        {
+            "type" : "cbc",
+            "snr"  : \
+                {"min_value" : 10, "max_value": 50, "mean_value": 20, "std": 10,  "distribution_type": "normal"},
+            "injection_chance" : 0.5,
+            "padding_seconds" : {"front" : 0.2, "back" : 0.1},
+            "args" : {
+                "approximant_enum" : \
+                    {"value" : 1, "distribution_type": "constant", "dtype" : int}, 
+                "mass_1_msun" : \
+                    {"min_value" : 5, "max_value": 95, "distribution_type": "uniform"},
+                "mass_2_msun" : \
+                    {"min_value" : 5, "max_value": 95, "distribution_type": "uniform"},
+                "sample_rate_hertz" : \
+                    {"value" : sample_rate_hertz, "distribution_type": "constant"},
+                "duration_seconds" : \
+                    {"value" : onsource_duration_seconds, "distribution_type": "constant"},
+                "inclination_radians" : \
+                    {"min_value" : 0, "max_value": np.pi, "distribution_type": "uniform"},
+                "distance_mpc" : \
+                    {"min_value" : 10, "max_value": 1000, "distribution_type": "uniform"},
+                "reference_orbital_phase_in" : \
+                    {"min_value" : 0, "max_value": 2*np.pi, "distribution_type": "uniform"},
+                "ascending_node_longitude" : \
+                    {"min_value" : 0, "max_value": 2*np.pi, "distribution_type": "uniform"},
+                "eccentricity" : \
+                    {"min_value" : 0, "max_value": 0.1, "distribution_type": "uniform"},
+                "mean_periastron_anomaly" : \
+                    {"min_value" : 0, "max_value": 2*np.pi, "distribution_type": "uniform"},
+                "spin_1_in" : \
+                    {"min_value" : -0.5, "max_value": 0.5, "distribution_type": "uniform", "num_values" : 3},
+                "spin_2_in" : \
+                    {"min_value" : -0.5, "max_value": 0.5, "distribution_type": "uniform", "num_values" : 3}
+            }
+        }
+    ]
+    
+    # Setting options for data distribution
+    options = tf.data.Options()
+    options.experimental_distribute.auto_shard_policy = AutoShardPolicy.DATA
+    
+     # Creating the noise dataset
+    cbc_ds = get_ifo_data_generator(
+        time_interval = time_interval,
+        data_labels = ["noise", "glitches"],
+        ifo = ifo,
+        injection_configs = injection_configs,
+        sample_rate_hertz = sample_rate_hertz,
+        onsource_duration_seconds = onsource_duration_seconds,
+        max_segment_size = 3600,
+        num_examples_per_batch = num_examples_per_batch,
+        order = "random",
+        seed = seed,
+        apply_whitening = True,
+        return_keys = ["onsource"], 
+    ).map(getInput, num_parallel_calls=tf.data.AUTOTUNE) \
+    .prefetch(tf.data.experimental.AUTOTUNE).with_options(options)
+    
+    # Use .map() to extract the true labels and model inputs
+    x_dataset = dataset.map(lambda x, y: x)
+    y_true_dataset = dataset.map(lambda x, y: y)
+
+    # Convert the true labels dataset to a tensor using reduce
+    y_true = y_true_dataset.reduce(tf.constant([], dtype=tf.float32), concat_labels)
+
+    # Get the model predictions
+    y_scores = model.predict(x_dataset, verbose = 2)[:, 1]
+
+    # Calculate the ROC curve and AUC
+    fpr, tpr, roc_auc = roc_curve_and_auc(y_true, y_scores)
+
+    return fpr.numpy(), tpr.numpy(), roc_auc.numpy()

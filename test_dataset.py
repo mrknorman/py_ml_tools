@@ -158,7 +158,7 @@ def test_injection():
     injection_configs = [
         {
             "type" : "cbc",
-            "snr"  : 30,
+            "snr"  : {"value" : 30, "distribution_type": "constant", "dtype" : int},
             "injection_chance" : 1.0,
             "padding_seconds" : {"front" : 0.2, "back" : 0.1},
             "args" : {

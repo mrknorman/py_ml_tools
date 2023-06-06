@@ -44,39 +44,56 @@ if __name__ == "__main__":
     options.experimental_distribute.auto_shard_policy = AutoShardPolicy.DATA
     
     skywarp_data_directory = "./skywarp_data/"
-    batch_size = 32
+    num_examples_per_batch = 32
     max_populaton = 10
     max_num_inital_layers = 10
+    sample_rate_hertz = 8192.0
+    onsource_duration_seconds = 1.0
     
     with strategy.scope():
         
-        cbc_ds = load_cbc_datasets(skywarp_data_directory, 1)
-        num_samples = get_element_shape(cbc_ds)[0]
+        # Create TensorFlow dataset from the generator
+        injection_configs = [
+            {
+                "type" : "cbc",
+                "snr"  : \
+                    {"min_value" : 0.0, "max_value": 50, "mean_value": 20, "std": 15,  "distribution_type": "normal"},
+                "injection_chance" : 0.5,
+                "padding_seconds" : {"front" : 0.2, "back" : 0.1},
+                "args" : {
+                    "approximant_enum" : \
+                        {"value" : 1, "distribution_type": "constant", "dtype" : int}, 
+                    "mass_1_msun" : \
+                        {"min_value" : 5, "max_value": 95, "distribution_type": "uniform"},
+                    "mass_2_msun" : \
+                        {"min_value" : 5, "max_value": 95, "distribution_type": "uniform"},
+                    "sample_rate_hertz" : \
+                        {"value" : sample_rate_hertz, "distribution_type": "constant"},
+                    "duration_seconds" : \
+                        {"value" : onsource_duration_seconds, "distribution_type": "constant"},
+                    "inclination_radians" : \
+                        {"min_value" : 0, "max_value": np.pi, "distribution_type": "uniform"},
+                    "distance_mpc" : \
+                        {"min_value" : 10, "max_value": 1000, "distribution_type": "uniform"},
+                    "reference_orbital_phase_in" : \
+                        {"min_value" : 0, "max_value": 2*np.pi, "distribution_type": "uniform"},
+                    "ascending_node_longitude" : \
+                        {"min_value" : 0, "max_value": 2*np.pi, "distribution_type": "uniform"},
+                    "eccentricity" : \
+                        {"min_value" : 0, "max_value": 0.1, "distribution_type": "uniform"},
+                    "mean_periastron_anomaly" : \
+                        {"min_value" : 0, "max_value": 2*np.pi, "distribution_type": "uniform"},
+                    "spin_1_in" : \
+                        {"min_value" : -0.5, "max_value": 0.5, "distribution_type": "uniform", "num_values" : 3},
+                    "spin_2_in" : \
+                        {"min_value" : -0.5, "max_value": 0.5, "distribution_type": "uniform", "num_values" : 3}
+                }
+            }
+        ]
 
-         # Create TensorFlow dataset from the generator
-        noise_ds = tf.data.Dataset.from_generator(
-            generator=lambda: gaussian_noise_generator(num_samples=num_samples),
-            output_signature=(
-                tf.TensorSpec(shape=(num_samples,), dtype=tf.float16),
-                tf.TensorSpec(shape=(), dtype=tf.float32),
-            )
-        )
-
-        cbc_ds = cbc_ds \
-            .batch(batch_size) \
-            .prefetch(tf.data.experimental.AUTOTUNE) \
-            .with_options(options) \
-            .take(100000) 
-
-        noise_ds = noise_ds \
-            .batch(batch_size) \
-            .prefetch(tf.data.experimental.AUTOTUNE) \
-            .with_options(options)
-
-        balanced_dataset = cbc_ds.concatenate(noise_ds \
-            .take(tf.data.experimental.cardinality(cbc_ds).numpy())) \
-            .prefetch(tf.data.experimental.AUTOTUNE) \
-            .with_options(options)
+        # Setting options for data distribution
+        options = tf.data.Options()
+        options.experimental_distribute.auto_shard_policy = AutoShardPolicy.DATA
         
         optimizer = HyperParameter(
                 {"type" : "list", "values" : ['adam']}
@@ -85,7 +102,7 @@ if __name__ == "__main__":
                 {"type" : "int_range", "values" : [1, max_num_inital_layers]}
             )
         batch_size = HyperParameter(
-                {"type" : "list", "values" : [batch_size]}
+                {"type" : "list", "values" : [num_examples_per_batch]}
             )
         activations = HyperParameter(
                 {"type" : "list", "values" : ['relu', 'elu', 'sigmoid', 'tanh']}
@@ -120,6 +137,32 @@ if __name__ == "__main__":
             ]
         }
         
-        population = Population(10, 15, genome_template, num_samples, 2)
-        population.train_population(1, balanced_dataset)
+        num_train_examples    = int(1.0E3)
+        num_validate_examples = int(1.0E2)
+        
+        # Creating the noise dataset
+        cbc_ds = get_ifo_data_generator(
+            time_interval = O3,
+            data_labels = ["noise", "glitches"],
+            ifo = 'L1',
+            injection_configs = injection_configs,
+            sample_rate_hertz = sample_rate_hertz,
+            onsource_duration_seconds = onsource_duration_seconds,
+            max_segment_size = 3600,
+            num_examples_per_batch = num_examples_per_batch,
+            order = "random",
+            seed = 123,
+            apply_whitening = True,
+            input_keys = ["onsource"], 
+            output_keys = ["snr"]
+        ).prefetch(tf.data.experimental.AUTOTUNE).with_options(options)
+        
+        population = Population(10, 15, genome_template, int(sample_rate_hertz*onsource_duration_seconds), 2)
+        population.train_population(
+            100, 
+            num_train_examples, 
+            num_validate_examples, 
+            num_examples_per_batch, 
+            cbc_ds
+        )
         

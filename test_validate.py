@@ -1,4 +1,4 @@
-from .validate import validate_far
+from .validate import validate_far, validate_efficiency
 from .setup import setup_cuda, find_available_GPUs
 import tensorflow as tf
 from tensorflow.keras import mixed_precision
@@ -25,13 +25,25 @@ if __name__ == "__main__":
                 f"./skywarp_data/models/skywarp_conv_regular"
             )
         logging.info("Done.")
-    
+        
         threshholds = validate_far(
             model,
             sample_rate_hertz,
             onsource_duration_seconds,
             ifo = 'L1',
-            num_examples = 1E4
+            num_examples = 1.0E4
         )    
         
         print(threshholds)
+        
+        efficiency_scores = validate_efficiency(
+            model,
+            sample_rate_hertz,
+            onsource_duration_seconds,
+            ifo = 'L1',
+            num_examples = 1.0E4,
+            max_snr = 100.0
+        )
+        
+        print(efficiency_scores)
+        
