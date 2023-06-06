@@ -35,15 +35,15 @@ def gaussian_noise_generator(num_samples=8192):
         yield noise, constant
 
 if __name__ == "__main__":
-    # Load datasets:
-    strategy = setup_cuda("6", verbose = True)
+    
+    gpus = find_available_GPUs(16000, 1)
+    strategy = setup_cuda(gpus, verbose = True)
         
     policy = mixed_precision.Policy('mixed_float16')
     mixed_precision.set_global_policy(policy)
     options = tf.data.Options()
     options.experimental_distribute.auto_shard_policy = AutoShardPolicy.DATA
     
-    skywarp_data_directory = "./skywarp_data/"
     num_examples_per_batch = 32
     max_populaton = 10
     max_num_inital_layers = 10

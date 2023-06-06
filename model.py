@@ -61,12 +61,17 @@ class HyperParameter:
             return mutated_param
         else:
             return deepcopy(self)
+        
+def hp(N):
+    return HyperParameter({'type': 'list', 'values': [N]})
 
+def ensure_hp(parameter):
+    return parameter if isinstance(parameter, HyperParameter) else hp(parameter)
 
 @dataclass
 class BaseLayer:
-    layer_type: HyperParameter
-    activation: HyperParameter
+    layer_type: str
+    activation: Union[HyperParameter, str]
     mutable_attributes: List
     
     def randomize(self):
@@ -95,7 +100,7 @@ class BaseLayer:
 
 @dataclass
 class DenseLayer(BaseLayer):
-    units: HyperParameter
+    units: [HyperParameter, int]
 
     def __init__(self, units: HyperParameter, activation: HyperParameter):
         """
@@ -106,8 +111,8 @@ class DenseLayer(BaseLayer):
         activation: HyperParameter specifying the activation function for this layer.
         """
         self.layer_type = "Dense"
-        self.activation = activation
-        self.units = units
+        self.activation = ensure_hp(activation)
+        self.units = ensure_hp(units)
         self.mutable_attributes = [self.activation, self.units]
 
 
@@ -115,8 +120,8 @@ class DenseLayer(BaseLayer):
 class ConvLayer(BaseLayer):
     filters: HyperParameter
     kernel_size: HyperParameter
-    strides: HyperParameter = HyperParameter({'type': 'list', 'values': [1]})
-    padding: HyperParameter = HyperParameter({'type': 'list', 'values': ['same']})
+    strides: HyperParameter = hp(1)
+    padding: HyperParameter = hp('same')
     
     def __init__(self, filters: HyperParameter, kernel_size: HyperParameter, activation: HyperParameter, strides: HyperParameter):
         """
@@ -129,11 +134,11 @@ class ConvLayer(BaseLayer):
         strides: HyperParameter specifying the stride length for this layer.
         """
         self.layer_type = "Convolutional"
-        self.activation = activation
-        self.filters = filters
-        self.kernel_size = kernel_size
-        self.strides = strides
-        self.padding = HyperParameter({"type" : "list", "values" : ["same"]})
+        self.activation = ensure_hp(activation)
+        self.filters = ensure_hp(filters)
+        self.kernel_size = ensure_hp(kernel_size)
+        self.strides = ensure_hp(strides)
+        self.padding = hp("same")
         self.mutable_attributes = [self.activation, self.filters, self.kernel_size, self.strides]
 
 
