@@ -1,6 +1,6 @@
 import tensorflow as tf
 from dataclasses import dataclass
-from typing import Union, List, Dict
+from typing import Union, List, Dict, Optional
 import numpy as np
 from copy import deepcopy
 
@@ -120,10 +120,14 @@ class DenseLayer(BaseLayer):
 class ConvLayer(BaseLayer):
     filters: HyperParameter
     kernel_size: HyperParameter
-    strides: HyperParameter = hp(1)
-    padding: HyperParameter = hp('same')
+    strides: HyperParameter
     
-    def __init__(self, filters: HyperParameter, kernel_size: HyperParameter, activation: HyperParameter, strides: HyperParameter):
+    def __init__(self, 
+        filters: HyperParameter, 
+        kernel_size: HyperParameter, 
+        activation: HyperParameter, 
+        strides: HyperParameter = hp(1)
+        ):
         """
         Initializes a ConvLayer instance.
         
@@ -138,9 +142,51 @@ class ConvLayer(BaseLayer):
         self.filters = ensure_hp(filters)
         self.kernel_size = ensure_hp(kernel_size)
         self.strides = ensure_hp(strides)
-        self.padding = hp("same")
-        self.mutable_attributes = [self.activation, self.filters, self.kernel_size, self.strides]
 
+        self.padding = hp("same")
+        
+        self.mutable_attributes = [self.activation, self.filters, self.kernel_size, self.strides]
+        
+@dataclass
+class PoolLayer(BaseLayer):
+    pool_size: HyperParameter
+    strides: HyperParameter
+    
+    def __init__(self, 
+        pool_size: HyperParameter, 
+        strides: Optional[Union[HyperParameter, int]] = None
+        ):
+        """
+        Initializes a PoolingLayer instance.
+        
+        Args:
+        pool_size: HyperParameter specifying the size of the pooling window.
+        strides: HyperParameter specifying the stride length for moving the pooling window.
+        """
+        self.layer_type = "Pooling"
+        self.pool_size = ensure_hp(pool_size)
+        
+        if strides is None:
+            self.strides = self.pool_size
+        else:
+            self.strides = ensure_hp(strides)
+        
+        self.padding = hp("same")
+        self.mutable_attributes = [self.pool_size, self.strides]
+        
+class DropLayer(BaseLayer):
+    rate: HyperParameter
+    
+    def __init__(self, rate: Union[HyperParameter, float]):
+        """
+        Initializes a DropLayer instance.
+        
+        Args:
+        rate: HyperParameter specifying the dropout rate for this layer.
+        """
+        self.layer_type = "Dropout"
+        self.rate = ensure_hp(rate)
+        self.mutable_attributes = [self.rate]
 
 def randomizeLayer(layer_types: List[str], default_layers: Dict[str, BaseLayer]) -> BaseLayer:
     """
@@ -171,9 +217,9 @@ class ModelBuilder:
         batch_size: Batch size to use when training the model.
         """        
         self.layers = layers
-        self.batch_size = batch_size
-        self.optimizer = optimizer
-        self.loss = loss
+        self.batch_size = ensure_hp(batch_size)
+        self.optimizer = ensure_hp(optimizer)
+        self.loss = ensure_hp(loss)
         
         self.fitness = []
         
@@ -188,7 +234,6 @@ class ModelBuilder:
         output_shape: Shape of the output data.
         """        
         
-        
         model = tf.keras.Sequential()
         model.add(tf.keras.layers.InputLayer(input_shape=input_shape, name='onsource'))
         model.add(tf.keras.layers.Reshape((-1, 1)))
@@ -202,12 +247,28 @@ class ModelBuilder:
                     )
                 )
             elif layer.layer_type == "Convolutional":
-                model.add(tf.keras.layers.Conv1D(
-                    layer.filters.value, 
-                    layer.kernel_size.value, 
-                    strides=layer.strides.value, 
-                    padding=layer.padding.value, 
-                    activation=layer.activation.value)
+                model.add(
+                    tf.keras.layers.Conv1D(
+                        layer.filters.value, 
+                        (layer.kernel_size.value,), 
+                        strides=(layer.strides.value,), 
+                        activation=layer.activation.value,
+                        padding = layer.padding.value
+                    )
+                )
+            elif layer.layer_type == "Pooling":
+                model.add(
+                    tf.keras.layers.MaxPool1D(
+                        (layer.pool_size.value,),
+                        strides=(layer.strides.value,),
+                        padding = layer.padding.value
+                    )
+                )
+            elif layer.layer_type == "Dropout":
+                model.add(
+                    tf.keras.layers.Dropout(
+                        layer.rate.value
+                    )
                 )
             else:
                 raise ValueError(f"Layer type '{layer.layer_type.value}' not recognized")
@@ -217,7 +278,7 @@ class ModelBuilder:
         
         model.add(tfp.layers.IndependentNormal(1, name = 'snr'))
         
-        model.compile(optimizer=self.optimizer, loss=self.loss,
+        model.compile(optimizer=self.optimizer.value, loss=self.loss.value,
                 metrics=[tf.keras.metrics.RootMeanSquaredError()])
                 
         self.model = model
@@ -240,7 +301,7 @@ class ModelBuilder:
                 train_dataset, 
                 epochs=num_epochs, 
                 steps_per_epoch=num_batches,
-                batch_size=self.batch_size
+                batch_size=self.batch_size.value
             )
         )
         
@@ -342,9 +403,9 @@ class Population:
             # Create an instance of DenseModelBuilder with num_neurons list
             builder = ModelBuilder(
                 layers, 
-                optimizer = genome_template['base']['optimizer'].value, 
-                loss = negative_loglikelihood, 
-                batch_size = genome_template['base']['batch_size'].value
+                optimizer = genome_template['base']['optimizer'], 
+                loss = hp(negative_loglikelihood), 
+                batch_size = genome_template['base']['batch_size']
             )
 
             # Build the model with input shape (input_dim,)

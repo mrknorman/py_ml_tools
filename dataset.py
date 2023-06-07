@@ -394,6 +394,7 @@ def add_injections(
                 if np.random.random() < config["injection_chance"]:
                     
                     if (injection_key in injection_file):
+                        
                         injection = injection_file[injection_key][()]
                         injection_parameters = {}
 
@@ -408,6 +409,7 @@ def add_injections(
                         injection = tf.convert_to_tensor(
                             injection[:, 1], dtype=tf.float32
                         )
+                        
                         
                         injection_file.create_dataset(
                             injection_key, 
