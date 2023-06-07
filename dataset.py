@@ -587,9 +587,10 @@ def process_valid_segments(
         print("Glitch vetos not implemented!")
         pass
     
-    veto_segments = np.concatenate(veto_segments)
-
-    valid_segments = veto_time_periods(valid_segments, veto_segments)
+    if veto_segments != []:
+        veto_segments = np.concatenate(veto_segments)
+        valid_segments = veto_time_periods(valid_segments, veto_segments)
+    
     valid_segments = split_periods(valid_segments, max_segment_size)
     valid_segments = remove_short_periods(
         valid_segments, 
