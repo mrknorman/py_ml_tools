@@ -8,18 +8,19 @@ from tensorflow.data import Dataset
 import subprocess
 from scipy.stats import truncnorm
 
-def setup_cuda(device_num: str, verbose: bool = False) -> Strategy:
+def setup_cuda(device_num: str, max_memory_limit: int, verbose: bool = False) -> Strategy:
     """
     Sets up CUDA for TensorFlow. Configures memory growth, logging verbosity, and returns the strategy for distributed computing.
 
     Args:
         device_num (str): The GPU device number to be made visible for TensorFlow.
+        max_memory_limit (int): The maximum GPU memory limit in MB.
         verbose (bool, optional): If True, prints the list of GPU devices. Defaults to False.
 
     Returns:
         tf.distribute.MirroredStrategy: The TensorFlow MirroredStrategy instance.
     """
-    
+
     # Set up logging to file - this is beneficial in debugging scenarios and for traceability.
     logging.basicConfig(filename='tensorflow_setup.log', level=logging.INFO)
     
@@ -42,12 +43,18 @@ def setup_cuda(device_num: str, verbose: bool = False) -> Strategy:
     if gpus:
         try:
             # Currently, memory growth needs to be the same across GPUs.
-            # Enable memory growth for each GPU.
+            # Enable memory growth for each GPU and set memory limit.
             for gpu in gpus:
-                tf.config.experimental.set_memory_growth(gpu, True)
+                # Limit the GPU memory.
+                tf.config.experimental.set_virtual_device_configuration(
+                    gpu,
+                    [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=max_memory_limit)])
+                
+                #tf.config.experimental.set_memory_growth(gpu, False)
+
         except RuntimeError as e:
             # This needs to be set before initializing GPUs.
-            logging.error(f"Failed to set memory growth: GPUs must be initialized first. Error message: {e}")
+            logging.error(f"Failed to set memory growth or set memory limit: GPUs must be initialized first. Error message: {e}")
             raise
 
     # MirroredStrategy performs synchronous distributed training on multiple GPUs on one machine.
@@ -63,6 +70,7 @@ def setup_cuda(device_num: str, verbose: bool = False) -> Strategy:
 
     # Return the MirroredStrategy instance.
     return strategy
+
 
 def find_available_GPUs(
     min_memory_MB : int, 
@@ -112,7 +120,7 @@ def find_available_GPUs(
     available_gpus = np.where(memory_array > min_memory_MB)[0].tolist()
     
     if (max_needed != -1) and (max_needed < len(available_gpus)):
-        available_gpus = available_gpus[:max_needed]
+        available_gpus = available_gpus[:-max_needed-1:-1]
 
     return ",".join(str(gpu) for gpu in available_gpus)
 

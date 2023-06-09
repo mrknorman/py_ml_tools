@@ -375,16 +375,7 @@ def add_injections(
                 batched_onsource.shape[-1] - \
                 int((crop_duration \
                      + config["padding_seconds"]["front"])*sample_rate_hertz) 
-            
-            if type(config["snr"]) == np.ndarray:  
-                snr = config["snr"][-1]
-                if batch_index < len(config["snr"]):
-                    snr = config["snr"][batch_index]
-            elif type(config["snr"]) == dict:
-                snr = randomise_dict(config["snr"])
-            else:
-                raise ValueError("Unsupported SNR type!")
-            
+                        
             batched_injections = []
             injection_snrs = []
             
@@ -392,6 +383,15 @@ def add_injections(
             
             for _ in range(num_batches):
                 if np.random.random() < config["injection_chance"]:
+                    
+                    if type(config["snr"]) == np.ndarray:  
+                        snr = config["snr"][-1]
+                        if batch_index < len(config["snr"]):
+                            snr = config["snr"][batch_index]
+                    elif type(config["snr"]) == dict:
+                        snr = randomise_dict(config["snr"])
+                    else:
+                        raise ValueError("Unsupported SNR type!")
                     
                     if (injection_key in injection_file):
                         
@@ -409,7 +409,6 @@ def add_injections(
                         injection = tf.convert_to_tensor(
                             injection[:, 1], dtype=tf.float32
                         )
-                        
                         
                         injection_file.create_dataset(
                             injection_key, 
@@ -429,14 +428,14 @@ def add_injections(
                 batched_injections.append(injection)
                     
             batched_injections = tf.stack(batched_injections)
-            
+                        
             injection_parameters["snr"] = tf.convert_to_tensor(injection_snrs)
                                     
             scaled_injection = \
                 scale_to_snr(
                     batched_injections, 
                     batched_offsource, 
-                    snr,
+                    injection_snrs,
                     window_duration_seconds=1.0,
                     sample_rate_hertz=sample_rate_hertz,
                     fft_duration_seconds=1.0,
