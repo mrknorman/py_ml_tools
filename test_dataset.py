@@ -1,5 +1,5 @@
 from .dataset import get_ifo_data_generator, get_ifo_data, O3
-from .setup import setup_cuda
+from .setup import setup_cuda, find_available_GPUs
 from bokeh.plotting import figure, output_file, show, save
 from bokeh.models import ColumnDataSource
 
@@ -153,7 +153,7 @@ def plot_time_series(onsource, injections, sample_rate_hertz, onsource_duration_
 def test_injection(): 
     
     sample_rate_hertz = 8196
-    duration_seconds = 2.0
+    duration_seconds = 1.0
     
     injection_configs = [
         {
@@ -202,8 +202,10 @@ def test_injection():
         max_segment_size = 3600,
         num_examples_per_batch = 32,
         order = "random",
+        force_generation = True,
         apply_whitening = True,
-        return_keys = ["onsource", "injections"],
+        input_keys = ["onsource"], 
+        output_keys = ["injections"],
         save_segment_data = True,
     )
     
@@ -235,8 +237,9 @@ def test_injection():
         num_examples_per_batch = 32,
         order = "random",
         apply_whitening = True,
-        return_keys = ["onsource", "injections"],
-        save_segment_data = True,
+        input_keys = ["onsource"], 
+        output_keys = ["injections"],
+        save_segment_data = True
     )
     
     ifo_data_generator = ifo_data_generator.take(100)
@@ -245,7 +248,9 @@ def test_injection():
 
                 
 if __name__ == "__main__":
-    setup_cuda("0", verbose = True)    
+    
+    gpus = find_available_GPUs(10000, 1)
+    setup_cuda("0", max_memory_limit = 2000, verbose = True)    
     test_injection()
     #test_noise()
 

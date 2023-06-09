@@ -302,6 +302,47 @@ def roll_vector_zero_padding(vector, min_roll, max_roll):
 
     return rolled_vector
 
+def load_generate_injections(
+    config: Dict[str, Any],
+    num_injections: int, 
+    injection_filename: str,
+    injection_key: str,
+    common_args: dict
+    ):
+
+    config["args"].update(common_args)
+    injection_chance = config["injection_chance"]
+
+    injections = []
+    injections_present = []
+    
+    injections_present_key = f"injections/present/{injection_key}"
+    with open_hdf5_file(injection_filename) as injection_file:
+
+        if injection_key in injection_file and False:
+            injections_present = injection_file[injections_present_key][()]
+            injections = injection_file[injection_key][()]
+        else:
+            injections_present = np.random.choice(
+                [False, True], 
+                size=num_injections, 
+                p=[1-injection_chance, injection_chance]
+            )
+
+            for _ in range(np.sum(injections_present)):
+
+                injection, injection_parameters = \
+                    randomise_arguments(
+                        config["args"], generate_phenom
+                    )
+                injection *= 10.0E20 
+                injections.append(injection[:, 1])
+                
+            #injection_file.create_dataset(injection_key, data=np.stack(injections))
+            #injection_file.create_dataset(injections_present_key, data=np.array(injections_present))
+        
+    return np.stack(injections), injections_present
+
 def add_injections(
     injection_configs: List[Dict[str, Any]], 
     sample_rate_hertz: float, 
@@ -869,10 +910,6 @@ def get_ifo_data(
     
     with open_hdf5_file(segment_filename) as segment_file:
         
-        injection_files = [
-            open_hdf5_file(filename) for filename in injection_filenames
-        ]
-        
         segment_file.require_group("segments")
         for current_segment_start, current_segment_end in valid_segments:
             
@@ -939,6 +976,43 @@ def get_ifo_data(
                     / (saturation * num_examples_per_batch)
                 )
             
+            
+            # Set common parameters before entering the loop
+            common_args = {
+                "sample_rate_hertz": \
+                    {"value": sample_rate_hertz, "distribution_type": "constant"},
+                "duration_seconds": \
+                    {
+                        "value": onsource_duration_seconds + fduration, 
+                         "distribution_type": "constant"
+                    }
+            }
+            
+            #Generate injections:
+            injections = []
+
+            for config, file_name in zip(injection_configs, injection_filenames):    
+                
+                injection_key = \
+                    f"injections/injections_{current_segment_start}_{current_segment_end}"\
+                    f"_{current_max_batch_count*num_examples_per_batch}"
+                
+                for _ in range(1000):
+                    #injections.append(
+                    injection = load_generate_injections(
+                            config,
+                            current_max_batch_count*num_examples_per_batch, 
+                            file_name,
+                            injection_key,
+                            common_args
+                        )
+                    #)
+                    print(injection[0].shape)
+
+                
+                
+            quit()
+
             for _ in range(current_max_batch_count):
                 
                 num_onsource_samples = \
@@ -962,6 +1036,10 @@ def get_ifo_data(
                 #Add injection: 
                 batched_injections = None
                 if injection_configs:
+                    
+                    pass
+                    
+                    """
                     batched_onsource, batched_injections, injection_parameters, injection_indicies = \
                         add_injections(
                             injection_configs, 
@@ -976,11 +1054,13 @@ def get_ifo_data(
                             injection_files
                         )
                     
+                    
                     batched_injections = crop_samples(
                         batched_injections, 
                         onsource_duration_seconds, 
                         sample_rate_hertz
                     )
+                    """
                                 
                 # Whiten data: 
                 if apply_whitening:
