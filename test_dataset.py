@@ -127,10 +127,10 @@ def plot_spectrogram(time_series, sample_rate_hertz, nperseg=128, noverlap=64, f
 def plot_time_series(onsource, injections, sample_rate_hertz, onsource_duration_seconds, file_name='bokeh_plot.html'):
     # Infer time axis from onsource_duration and sample rate
     time_axis = np.linspace(0, onsource_duration_seconds, onsource.shape[-1])
-
+        
     # Take the first example from the batches
     onsource_first = onsource[0]
-    injections_first = injections[0, 0]
+    injections_first = injections[0]
 
     # Preparing the data
     source = ColumnDataSource(data=dict(time=time_axis, onsource=onsource_first, injections=injections_first))
@@ -158,7 +158,7 @@ def test_injection():
     injection_configs = [
         {
             "type" : "cbc",
-            "snr"  : {"value" : 30, "distribution_type": "constant", "dtype" : int},
+            "snr"  : {"value" : 50, "distribution_type": "constant", "dtype" : int},
             "injection_chance" : 1.0,
             "padding_seconds" : {"front" : 0.2, "back" : 0.1},
             "args" : {
@@ -212,14 +212,14 @@ def test_injection():
     for data in islice(ifo_data_generator, 1):
         
         plot_time_series(
-            data['onsource'].numpy(), 
-            data['injections'].numpy(), 
+            data[0]['onsource'].numpy(), 
+            data[1]['injections'][0].numpy(), 
             sample_rate_hertz, 
             duration_seconds, 
             file_name='./py_ml_data/injection_test.html'
         )
         plot_spectrogram(
-            data['onsource'][0].numpy(), 
+            data[0]['onsource'][0].numpy(), 
             sample_rate_hertz, 
             nperseg=256, 
             noverlap=128, 
