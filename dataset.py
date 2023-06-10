@@ -1146,7 +1146,7 @@ def get_ifo_data(
                 if 'injections' in input_keys:
                     input_dict['injections'] = cropped_injections
                 if 'snr' in input_keys:
-                    input_dict['snr'] = snrs[batch_index]
+                    input_dict['snr'] = snrs[0][batch_index]
                     
                 ouput_dict = {}
                 if 'onsource' in output_keys:
@@ -1160,7 +1160,7 @@ def get_ifo_data(
                 if 'injections' in output_keys:
                     ouput_dict['injections'] = cropped_injections
                 if 'snr' in output_keys:
-                    ouput_dict['snr'] = snrs[batch_index]
+                    ouput_dict['snr'] = snrs[0][batch_index]
                                 
                 yield (input_dict, ouput_dict)
 
