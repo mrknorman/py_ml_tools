@@ -331,7 +331,7 @@ def load_generate_injections(
     snr_key = f"injections/snrs/{injection_key}"
     with open_hdf5_file(injection_filename) as injection_file:
 
-        if injection_key in injection_file and False:
+        if injection_key in injection_file:
             injection_masks = injection_file[injection_masks_key][()]
             injections = injection_file[injection_key][()]
             snrs = injection_file[snr_key][()]
@@ -362,9 +362,9 @@ def load_generate_injections(
                     
                 snrs.append(snr)
                 
-            #injection_file.create_dataset(injection_key, data=np.stack(injections))
-            #injection_file.create_dataset(injection_masks_key, data=np.array(injection_masks))
-            #injection_file.create_dataset(snrs_key, data=np.array(snrs))
+            injection_file.create_dataset(injection_key, data=np.stack(injections))
+            injection_file.create_dataset(injection_masks_key, data=np.array(injection_masks))
+            injection_file.create_dataset(snr_key, data=np.array(snrs))
 
     crop_duration = fduration / 2.0
 
