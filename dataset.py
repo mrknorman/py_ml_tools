@@ -328,13 +328,11 @@ def load_generate_injections(
     snrs = []
     
     injection_masks_key = f"injections/masks/{injection_key}"
-    snr_key = f"injections/snrs/{injection_key}"
     with open_hdf5_file(injection_filename) as injection_file:
 
         if injection_key in injection_file:
             injection_masks = injection_file[injection_masks_key][()]
             injections = injection_file[injection_key][()]
-            snrs = injection_file[snr_key][()]
         else:
             injection_masks = np.random.choice(
                 [False, True], 
@@ -351,20 +349,20 @@ def load_generate_injections(
                 injection *= 10.0E20 
                 injections.append(injection[:, 1])
                 
-                if type(config["snr"]) == np.ndarray:  
-                    snr = config["snr"][-1]
-                    if i < len(config["snr"]):
-                        snr = config["snr"][i]
-                elif type(config["snr"]) == dict:
-                    snr = randomise_dict(config["snr"])
-                else:
-                    raise ValueError("Unsupported SNR type!") 
-                    
-                snrs.append(snr)
-                
             injection_file.create_dataset(injection_key, data=np.stack(injections))
             injection_file.create_dataset(injection_masks_key, data=np.array(injection_masks))
-            injection_file.create_dataset(snr_key, data=np.array(snrs))
+        
+    for _ in range(np.sum(injection_masks)):
+        if type(config["snr"]) == np.ndarray:  
+            snr = config["snr"][-1]
+            if i < len(config["snr"]):
+                snr = config["snr"][i]
+        elif type(config["snr"]) == dict:
+            snr = randomise_dict(config["snr"])
+        else:
+            raise ValueError("Unsupported SNR type!") 
+
+        snrs.append(snr)         
 
     crop_duration = fduration / 2.0
 
@@ -785,7 +783,7 @@ def generate_filenames(
     # Generate the hashes for the injection configurations    
     injection_hashes = [ 
         generate_hash_from_list( 
-            get_sorted_values(config['args']) + [seed]
+            get_sorted_values(config['args']) + [seed] + [config['injection_chance']]
         ) 
         for config in injection_configs
     ]

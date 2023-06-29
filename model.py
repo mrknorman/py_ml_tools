@@ -4,10 +4,226 @@ from typing import Union, List, Dict, Optional
 import numpy as np
 from copy import deepcopy
 
+from keras.layers import Lambda
+from keras import backend as K
+
 import tensorflow_probability as tfp
 
 def negative_loglikelihood(targets, estimated_distribution):
+    
+    targets = tf.cast(targets, dtype = tf.float32)
     return -estimated_distribution.log_prob(targets)
+
+def negative_loglikelihood_(y_true, y_pred):
+    loc, scale = tf.unstack(tf.cast(y_pred, dtype = tf.float32), axis=-1)
+    y_true = tf.cast(y_true, dtype = tf.float32)
+
+    truncated_normal = tfp.distributions.TruncatedNormal(
+        loc,
+        scale + 1.0E-5,
+        0.0,
+        1000.0,
+        validate_args=False,
+        allow_nan_stats=True,
+        name='TruncatedNormal'
+    )
+        
+    return -truncated_normal.log_prob(y_true)
+
+tfd = tfp.distributions
+tfpl = tfp.layers
+
+class IndependentGamma(tfpl.DistributionLambda):
+    """An independent Gamma Keras layer."""
+
+    def __init__(self,
+                 event_shape=(),
+                 convert_to_tensor_fn=tfd.Distribution.sample,
+                 validate_args=False,
+                 **kwargs):
+        super(IndependentGamma, self).__init__(
+            lambda t: self.new(t, event_shape, validate_args),
+            convert_to_tensor_fn,
+            **kwargs
+        )
+        self._event_shape = event_shape
+        self._validate_args = validate_args
+
+    def new(self, params, event_shape=(), validate_args=False, name=None):
+        """Create the distribution instance from a `params` vector."""
+        with tf.name_scope(name or 'IndependentGamma'):
+            params = tf.convert_to_tensor(params, name='params')
+            event_shape = tf.reshape(event_shape, [-1])
+            output_shape = tf.concat([
+                tf.shape(params)[:-1],
+                event_shape
+            ], axis=0)
+            alpha_params, beta_params = tf.split(params, 2, axis=-1)
+            alpha_params = tf.nn.softplus(tf.cast(alpha_params, dtype = tf.float32)) + 1.0E-5
+            beta_params = tf.nn.softplus(tf.cast(beta_params, dtype = tf.float32)) + 1.0E-5
+            
+            return tfd.Independent(
+                tfd.Gamma(
+                    concentration=tf.reshape(alpha_params, output_shape),
+                    rate=tf.reshape(beta_params, output_shape),
+                    validate_args=validate_args),
+                reinterpreted_batch_ndims=tf.size(event_shape),
+                validate_args=validate_args)
+
+    @staticmethod
+    def params_size(event_shape=(), name=None):
+        """The number of `params` needed to create a single distribution."""
+        with tf.name_scope(name or 'IndependentGamma_params_size'):
+            event_shape = tf.convert_to_tensor(event_shape, name='event_shape', dtype_hint=tf.int32)
+            return np.int32(2) * np.prod(event_shape)
+
+    def get_config(self):
+        """Returns the config of this layer."""
+        config = {
+            'event_shape': self._event_shape,
+            'convert_to_tensor_fn': self.convert_to_tensor_fn,
+            'validate_args': self._validate_args
+        }
+        base_config = super(IndependentGamma, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+class IndependentTruncNormal(tfpl.DistributionLambda):
+    """An independent truncated normal Keras layer."""
+
+    def __init__(self,
+                 event_shape=(),
+                 low=  0.000,
+                 high= 100.0, #float("inf"),
+                 convert_to_tensor_fn=tfd.Distribution.sample,
+                 validate_args=False,
+                 **kwargs):
+        self.low = low
+        self.high = high
+        super(IndependentTruncNormal, self).__init__(
+            lambda t: self.new(t, event_shape, validate_args),
+            convert_to_tensor_fn,
+            **kwargs
+        )
+        self._event_shape = event_shape
+        self._validate_args = validate_args
+
+    def new(self, params, event_shape=(), validate_args=False, name=None):
+        """Create the distribution instance from a `params` vector."""
+        with tf.name_scope(name or 'IndependentTruncNormal'):
+            params = tf.convert_to_tensor(params, name='params')
+            event_shape = tf.reshape(event_shape, [-1])
+            output_shape = tf.concat([
+                tf.shape(params)[:-1],
+                event_shape
+            ], axis=0)
+            loc_params, scale_params = tf.split(params, 2, axis=-1)
+            loc_params = tf.cast(loc_params, dtype = tf.float32)  + 1.0E-5
+            scale_params = tf.cast(loc_params, dtype = tf.float32) + 1.0E-5
+            
+            return tfd.Independent(
+                tfd.TruncatedNormal(
+                    loc=tf.reshape(loc_params, output_shape),
+                    scale=tf.math.softplus(tf.reshape(scale_params, output_shape)),
+                    low=self.low,
+                    high=self.high,
+                    validate_args=validate_args),
+                reinterpreted_batch_ndims=tf.size(event_shape),
+                validate_args=validate_args)
+
+    @staticmethod
+    def params_size(event_shape=(), name=None):
+        """The number of `params` needed to create a single distribution."""
+        with tf.name_scope(name or 'IndependentTruncNormal_params_size'):
+            event_shape = tf.convert_to_tensor(event_shape, name='event_shape', dtype_hint=tf.int32)
+            return np.int32(2) * np.prod(event_shape)
+
+    def get_config(self):
+        """Returns the config of this layer."""
+        config = {
+            'event_shape': self._event_shape,
+            'convert_to_tensor_fn': self.convert_to_tensor_fn,
+            'validate_args': self._validate_args
+        }
+        base_config = super(IndependentTruncNormal, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+tfb = tfp.bijectors
+class BetaPrime(tfb.Bijector):
+    """Bijector for the beta prime distribution."""
+    def __init__(self, validate_args=False, name="beta_prime"):
+        super(BetaPrime, self).__init__(
+            validate_args=validate_args, forward_min_event_ndims=0, name=name)
+
+    def _forward(self, x):
+        return x / (1 - x)
+
+    def _inverse(self, y):
+        return y / (1 + y)
+
+    def _forward_log_det_jacobian(self, x):
+        return - tf.math.log1p(-x)
+
+    def _inverse_log_det_jacobian(self, y):
+        return - tf.math.log1p(y)
+
+
+class IndependentBetaPrime(tfpl.DistributionLambda):
+    """An independent Beta prime Keras layer."""
+    def __init__(self,
+                 event_shape=(),
+                 convert_to_tensor_fn=tfd.Distribution.sample,
+                 validate_args=False,
+                 **kwargs):
+        super(IndependentBetaPrime, self).__init__(
+            lambda t: self.new(t, event_shape, validate_args),
+            convert_to_tensor_fn,
+            **kwargs
+        )
+        self._event_shape = event_shape
+        self._validate_args = validate_args
+
+    def new(self, params, event_shape=(), validate_args=False, name=None):
+        """Create the distribution instance from a `params` vector."""
+        with tf.name_scope(name or 'IndependentBetaPrime'):
+            
+            params = tf.cast(tf.convert_to_tensor(params, name='params'), tf.float32)
+            event_shape = tf.reshape(event_shape, [-1])
+            output_shape = tf.concat([
+                tf.shape(params)[:-1],
+                event_shape
+            ], axis=0)
+            concentration1_params, concentration0_params = tf.split(params, 2, axis=-1)
+            concentration1_params = tf.math.softplus(tf.reshape(concentration1_params, output_shape))
+            concentration0_params = tf.math.softplus(tf.reshape(concentration0_params, output_shape))
+
+            return tfd.Independent(
+                tfd.TransformedDistribution(
+                    distribution=tfd.Beta(
+                        concentration1=concentration1_params,
+                        concentration0=concentration0_params,
+                        validate_args=validate_args),
+                    bijector=BetaPrime(),
+                    validate_args=validate_args),
+                reinterpreted_batch_ndims=tf.size(event_shape),
+                validate_args=validate_args)
+
+    @staticmethod
+    def params_size(event_shape=(), name=None):
+        """The number of `params` needed to create a single distribution."""
+        with tf.name_scope(name or 'IndependentBetaPrime_params_size'):
+            event_shape = tf.convert_to_tensor(event_shape, name='event_shape', dtype_hint=tf.int32)
+            return np.int32(2) * np.prod(event_shape)
+
+    def get_config(self):
+        """Returns the config of this layer."""
+        config = {
+            'event_shape': self._event_shape,
+            'convert_to_tensor_fn': self.convert_to_tensor_fn,
+            'validate_args': self._validate_args
+        }
+        base_config = super(IndependentBetaPrime, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
 
 @dataclass
 class HyperParameter:
@@ -97,7 +313,6 @@ class BaseLayer:
             setattr(mutated_layer, attribute_name, mutated_value)
         return mutated_layer
 
-
 @dataclass
 class DenseLayer(BaseLayer):
     units: [HyperParameter, int]
@@ -114,7 +329,6 @@ class DenseLayer(BaseLayer):
         self.activation = ensure_hp(activation)
         self.units = ensure_hp(units)
         self.mutable_attributes = [self.activation, self.units]
-
 
 @dataclass
 class ConvLayer(BaseLayer):
@@ -204,6 +418,27 @@ def randomizeLayer(layer_types: List[str], default_layers: Dict[str, BaseLayer])
     layer.randomize()
     return layer
 
+"""
+class TruncatedNormal(tf.keras.layers.Layer):
+    def __init__(self, event_shape=1, **kwargs):
+        super(TruncatedNormal, self).__init__(**kwargs)
+        self.event_shape = event_shape
+
+    def build(self, input_shape):
+        # Input should be of shape (batch_size, 2) 
+        # with the first column as the mean and the second column as the standard deviation
+        assert input_shape[-1] == 2
+
+    def call(self, inputs):
+        loc, scale = tf.unstack(inputs, axis=-1)
+        return loc, scale
+
+    def get_config(self):
+        return {'event_shape': self.event_shape}
+"""
+
+def cap_value(x):
+    return K.clip(x, 1.0e-5, 1000)  # values will be constrained to [-1, 1]
 
 class ModelBuilder:
     def __init__(self, layers: List[BaseLayer], optimizer: str, loss: str, batch_size: int):
@@ -274,9 +509,12 @@ class ModelBuilder:
                 raise ValueError(f"Layer type '{layer.layer_type.value}' not recognized")
         
         model.add(tf.keras.layers.Flatten())
-        model.add(tf.keras.layers.Dense(2, activation='relu'))
+        model.add(tf.keras.layers.Dense(2, activation='relu', dtype='float32', bias_initializer=tf.keras.initializers.Constant([1.0, 2.0])))#, name='snr',  bias_initializer=tf.keras.initializers.Constant([1.0, 2.0])))  # Different biases for each unit))
+        #model.add(Lambda(cap_value))
         
-        model.add(tfp.layers.IndependentNormal(1, name = 'snr'))
+        model.add(IndependentGamma(1, name='snr'))
+        
+        #model.add(tfp.layers.IndependentNormal(1, name = 'snr'))
         
         model.compile(optimizer=self.optimizer.value, loss=self.loss.value,
                 metrics=[tf.keras.metrics.RootMeanSquaredError()])
@@ -486,7 +724,3 @@ class Population:
                         
             print(self.fitnesses)
             print(mean(self.fitnesses))
-        
-        
-        
-                    

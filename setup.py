@@ -177,8 +177,8 @@ def randomise_dict(value):
     else:
         min_value = float(value.get('min_value', '-inf'))
         max_value = float(value.get('max_value', 'inf'))
-        mean_value = float(value.get('mean_value', '0.0'))
-        std = float(value.get('std', '1.0'))
+        mean_value = float(value.get('mean_value', 0.0))
+        std = float(value.get('std', 1.0))
 
         if distribution_type == 'uniform':
             random_values = np.random.uniform(min_value, max_value, num_values)
