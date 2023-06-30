@@ -86,6 +86,64 @@ class IndependentGamma(tfpl.DistributionLambda):
         }
         base_config = super(IndependentGamma, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
+    
+class IndependentFoldedNormal(tfpl.DistributionLambda):
+    """An independent folded normal Keras layer."""
+
+    def __init__(self,
+                 event_shape=(),
+                 convert_to_tensor_fn=tfd.Distribution.sample,
+                 validate_args=False,
+                 **kwargs):
+        super(IndependentFoldedNormal, self).__init__(
+            lambda t: self.new(t, event_shape, validate_args),
+            convert_to_tensor_fn,
+            **kwargs
+        )
+        self._event_shape = event_shape
+        self._validate_args = validate_args
+
+    def new(self, params, event_shape=(), validate_args=False, name=None):
+        """Create the distribution instance from a `params` vector."""
+        with tf.name_scope(name or 'IndependentFoldedNormal'):
+            params = tf.convert_to_tensor(params, name='params')
+            event_shape = tf.reshape(event_shape, [-1])
+            output_shape = tf.concat([
+                tf.shape(params)[:-1],
+                event_shape
+            ], axis=0)
+            loc_params, scale_params = tf.split(params, 2, axis=-1)
+            loc_params = tf.cast(loc_params, dtype = tf.float32)  + 1.0E-6
+            scale_params = tf.cast(scale_params, dtype = tf.float32) + 1.0E-6
+
+            return tfd.Independent(
+                tfd.TransformedDistribution(
+                    distribution=tfd.Normal(
+                        loc=tf.math.softplus(tf.reshape(loc_params, output_shape)),
+                        scale=tf.math.softplus(tf.reshape(scale_params, output_shape)),
+                        validate_args=validate_args),
+                    bijector=tfb.AbsoluteValue(),
+                    validate_args=validate_args),
+                reinterpreted_batch_ndims=tf.size(event_shape),
+                validate_args=validate_args)
+
+    @staticmethod
+    def params_size(event_shape=(), name=None):
+        """The number of `params` needed to create a single distribution."""
+        with tf.name_scope(name or 'IndependentFoldedNormal_params_size'):
+            event_shape = tf.convert_to_tensor(event_shape, name='event_shape', dtype_hint=tf.int32)
+            return np.int32(2) * np.prod(event_shape)
+
+    def get_config(self):
+        """Returns the config of this layer."""
+        config = {
+            'event_shape': self._event_shape,
+            'convert_to_tensor_fn': self.convert_to_tensor_fn,
+            'validate_args': self._validate_args
+        }
+        base_config = super(IndependentFoldedNormal, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
 
 class IndependentTruncNormal(tfpl.DistributionLambda):
     """An independent truncated normal Keras layer."""
@@ -509,10 +567,10 @@ class ModelBuilder:
                 raise ValueError(f"Layer type '{layer.layer_type.value}' not recognized")
         
         model.add(tf.keras.layers.Flatten())
-        model.add(tf.keras.layers.Dense(2, activation='relu', dtype='float32', bias_initializer=tf.keras.initializers.Constant([1.0, 2.0])))#, name='snr',  bias_initializer=tf.keras.initializers.Constant([1.0, 2.0])))  # Different biases for each unit))
+        model.add(tf.keras.layers.Dense(2, activation='linear', dtype='float32', bias_initializer=tf.keras.initializers.Constant([1.0, 2.0])))#, name='snr',  bias_initializer=tf.keras.initializers.Constant([1.0, 2.0])))  # Different biases for each unit))
         #model.add(Lambda(cap_value))
         
-        model.add(IndependentGamma(1, name='snr'))
+        model.add(IndependentFoldedNormal(1, name='snr'))
         
         #model.add(tfp.layers.IndependentNormal(1, name = 'snr'))
         
