@@ -82,6 +82,8 @@ class IFOData:
             self.data = tf.convert_to_tensor(self.data.value, dtype=tf.float32)
         elif (type(self.data) == np.ndarray):
             self.data = tf.convert_to_tensor(self.data, dtype=tf.float32)
+        
+        self.data = replace_nan_and_inf_with_zero(self.data)
                     
         self.duration = \
             tf.cast(tf.shape(self.data)[0], tf.float32) / self.sample_rate
@@ -144,7 +146,12 @@ def random_subsection(
 
         return batch_subarrays, batch_background_chunks, t0_subsections
 
-    
+@tf.function
+def replace_nan_and_inf_with_zero(tensor):
+    tensor = tf.where(tf.math.is_nan(tensor), tf.zeros_like(tensor), tensor)
+    tensor = tf.where(tf.math.is_inf(tensor), tf.zeros_like(tensor), tensor)
+    return tensor    
+
 def get_segment_times(
     start: float,
     stop: float,
